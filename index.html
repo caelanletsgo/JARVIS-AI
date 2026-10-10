@@ -78,7 +78,32 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   <div class="group">
     <strong>Voice</strong>
     <p class="small">Pick the voice that sounds most like JARVIS. The list comes from your phone, so you may see a few British options. Lower pitch and a slightly slower pace give a calmer, butler-like tone.</p>
-    <label for="voiceSelect">Voice</label>
+    <label for="engine">Voice engine</label>
+    <select id="engine">
+      <option value="phone">Phone voice (free, unlimited)</option>
+      <option value="kokoro">On-device British voice (Kokoro: free, unlimited, ~90 MB download once)</option>
+      <option value="gemini">Gemini voice (more natural, uses your Gemini key)</option>
+    </select>
+    <label for="kokoroVoice">On-device voice</label>
+    <select id="kokoroVoice">
+      <option value="bm_george">George (British male)</option>
+      <option value="bm_lewis">Lewis (British male)</option>
+      <option value="bm_fable">Fable (British male)</option>
+      <option value="bm_daniel">Daniel (British male)</option>
+    </select>
+    <p class="small" id="kokoroStatus"></p>
+    <label for="geminiVoice">Gemini voice</label>
+    <select id="geminiVoice">
+      <option>Charon</option><option>Algieba</option><option>Iapetus</option><option>Orus</option>
+      <option>Alnilam</option><option>Rasalgethi</option><option>Sadaltager</option><option>Enceladus</option><option>Puck</option>
+    </select>
+    <label for="ttsModel">Gemini voice model</label>
+    <input id="ttsModel" autocomplete="off">
+    <label for="ttsLimit">Gemini voice replies per day (then the phone voice takes over)</label>
+    <input id="ttsLimit" type="number" min="0" max="1000" inputmode="numeric">
+    <p class="small" id="ttsUsed"></p>
+    <p class="small">Gemini voice needs a free Gemini key (aistudio.google.com) in the field below. Free limits are small and can change. If it runs out, JARVIS falls back to the phone voice automatically.</p>
+    <label for="voiceSelect">Phone voice</label>
     <select id="voiceSelect"></select>
     <label for="rate">Speed: <span id="rateVal"></span></label>
     <input id="rate" type="range" min="0.6" max="1.4" step="0.05">
@@ -143,7 +168,12 @@ const DEFAULTS = {
   finnhubKey:"",
   voiceURI:"",
   rate:0.95,
-  pitch:0.8
+  pitch:0.8,
+  voiceEngine:"phone",
+  geminiVoice:"Charon",
+  ttsModel:"gemini-2.5-flash-preview-tts",
+  ttsDailyLimit:40,
+  kokoroVoice:"bm_george"
 };
 
 function load(key,fallback){
@@ -496,17 +526,158 @@ function populateVoices(){
   select.value=voices.some(v=>v.voiceURI===config.voiceURI)?config.voiceURI:"";
 }
 
-function speak(text){
-  if(!("speechSynthesis" in window)) return;
-  const id=++speakId;
-  clearPending();
-  speechSynthesis.cancel();
+/* Gemini voice: returns an AudioBuffer, cached so repeated lines cost nothing */
+const ttsCache=new Map();
+let audioCtx=null,currentSource=null;
+let ttsBlockedUntil=0,ttsNoticeAt=0;
+
+function ttsUsage(){
+  const today=new Date().toDateString();
+  const u=load("jarvis.ttsUsage",{});
+  return u.day===today?u:{day:today,count:0};
+}
+function bumpTtsUsage(){
+  const u=ttsUsage();
+  u.count++;
+  save("jarvis.ttsUsage",u);
+}
+function quietError(message){
+  const e=Error(message);
+  e.quiet=true;
+  return e;
+}
+
+function ensureAudio(){
+  try{
+    if(!audioCtx){
+      const AC=window.AudioContext||window.webkitAudioContext;
+      if(AC) audioCtx=new AC();
+    }
+    if(audioCtx&&audioCtx.state==="suspended") audioCtx.resume();
+  }catch(e){console.debug(e);}
+}
+document.addEventListener("pointerdown",ensureAudio);
+
+function stopAudio(){
+  if(currentSource){
+    const s=currentSource;
+    currentSource=null;
+    s.onended=null;
+    try{s.stop();}catch{}
+  }
+}
+
+async function geminiSpeechBuffer(text){
+  if(!config.geminiKey) throw Error("add a Gemini key in Settings");
+  ensureAudio();
+  if(!audioCtx) throw Error("audio is unavailable");
+  const key=config.geminiVoice+"|"+text;
+  if(ttsCache.has(key)) return ttsCache.get(key); /* replays are free */
+  if(ttsUsage().count>=config.ttsDailyLimit) throw quietError("daily Gemini voice budget used");
+  if(Date.now()<ttsBlockedUntil) throw quietError("Gemini voice cooling down");
+  const url="https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(config.ttsModel)+":generateContent";
+  const response=await fetch(url,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-goog-api-key":config.geminiKey},
+    body:JSON.stringify({
+      contents:[{parts:[{text:"Say this in a calm, dry, refined British butler voice, unhurried and quietly amused: "+text}]}],
+      generationConfig:{
+        responseModalities:["AUDIO"],
+        speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:config.geminiVoice}}}
+      }
+    })
+  });
+  const data=await response.json();
+  if(response.status===429){
+    ttsBlockedUntil=Date.now()+120000; /* back off for two minutes */
+    throw Error("Gemini voice limit reached for now");
+  }
+  if(!response.ok) throw Error(data?.error?.message||"request failed");
+  const part=(data.candidates?.[0]?.content?.parts||[]).find(p=>p.inlineData);
+  if(!part) throw Error("no audio returned");
+  const rateMatch=/rate=(\d+)/.exec(part.inlineData.mimeType||"");
+  const sampleRate=rateMatch?parseInt(rateMatch[1],10):24000;
+  const bin=atob(part.inlineData.data);
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  const pcm=new Int16Array(bytes.buffer,0,Math.floor(bytes.length/2));
+  const buffer=audioCtx.createBuffer(1,pcm.length,sampleRate);
+  const channel=buffer.getChannelData(0);
+  for(let i=0;i<pcm.length;i++) channel[i]=pcm[i]/32768;
+  bumpTtsUsage();
+  if(ttsCache.size>40) ttsCache.delete(ttsCache.keys().next().value);
+  ttsCache.set(key,buffer);
+  return buffer;
+}
+
+/* On-device voice (Kokoro). Downloads once (~90 MB), then works offline with no limits.
+   Until it is ready, JARVIS keeps using the phone voice. */
+let kokoroTTS=null,kokoroState="idle",kokoroError="";
+
+function kokoroStatusText(){
+  if(kokoroState==="ready") return "On-device voice: ready.";
+  if(kokoroState==="loading") return "On-device voice: downloading (one time, about 90 MB). The phone voice is used until it is ready.";
+  if(kokoroState==="failed") return "On-device voice failed to load ("+kokoroError+"). Using the phone voice.";
+  return "On-device voice: not loaded yet.";
+}
+function showKokoroStatus(){
+  const el=$("kokoroStatus");
+  if(el) el.textContent=kokoroStatusText();
+}
+async function startKokoroLoad(){
+  if(kokoroState==="loading"||kokoroState==="ready") return;
+  kokoroState="loading";
+  kokoroError="";
+  showKokoroStatus();
+  systemMessage("Downloading the on-device voice once (about 90 MB, best on Wi-Fi). Using the phone voice until it is ready.");
+  try{
+    const mod=await import("https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm");
+    kokoroTTS=await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX",{dtype:"q8",device:"wasm"});
+    kokoroState="ready";
+    systemMessage("On-device voice is ready.");
+  }catch(e){
+    console.error(e);
+    kokoroState="failed";
+    kokoroError=(e&&e.message)?e.message:"unknown error";
+  }
+  showKokoroStatus();
+}
+
+async function kokoroSpeechBuffer(text){
+  ensureAudio();
+  if(!audioCtx) throw Error("audio is unavailable");
+  if(!kokoroTTS){
+    startKokoroLoad();
+    throw quietError("on-device voice still loading");
+  }
+  const key="k|"+config.kokoroVoice+"|"+text;
+  if(ttsCache.has(key)) return ttsCache.get(key);
+  const out=await kokoroTTS.generate(text,{voice:config.kokoroVoice,speed:config.rate});
+  const data=out.audio;
+  const buffer=audioCtx.createBuffer(1,data.length,out.sampling_rate);
+  buffer.copyToChannel(data,0);
+  if(ttsCache.size>40) ttsCache.delete(ttsCache.keys().next().value);
+  ttsCache.set(key,buffer);
+  return buffer;
+}
+
+function speakWithPhone(text,done){
   const utterance=new SpeechSynthesisUtterance(text);
   const voice=getVoice();
   if(voice) utterance.voice=voice;
   utterance.lang=voice?voice.lang:"en-GB";
   utterance.rate=config.rate;
   utterance.pitch=config.pitch;
+  utterance.onend=done;
+  utterance.onerror=done;
+  speechSynthesis.speak(utterance);
+}
+
+function speak(text){
+  const id=++speakId;
+  clearPending();
+  if("speechSynthesis" in window) speechSynthesis.cancel();
+  stopAudio();
   speaking=true;
   if(listening) stopRecognitionOnly();
   status("Speaking");
@@ -519,9 +690,35 @@ function speak(text){
     if(listening) startRecognitionOnly();
     else status("Ready");
   };
-  utterance.onend=done;
-  utterance.onerror=done;
-  speechSynthesis.speak(utterance);
+  const phone=()=>{
+    if("speechSynthesis" in window) speakWithPhone(text,done);
+    else done();
+  };
+  const play=buffer=>{
+    if(id!==speakId) return;
+    stopAudio();
+    const src=audioCtx.createBufferSource();
+    src.buffer=buffer;
+    src.connect(audioCtx.destination);
+    currentSource=src;
+    src.onended=()=>{ if(currentSource===src) currentSource=null; done(); };
+    src.start();
+  };
+  const fail=e=>{
+    if(id!==speakId) return;
+    if(Date.now()-ttsNoticeAt>600000){
+      ttsNoticeAt=Date.now();
+      systemMessage("Using the phone voice for now ("+e.message+").");
+    }
+    phone();
+  };
+  if(config.voiceEngine==="gemini"){
+    geminiSpeechBuffer(text).then(play).catch(fail);
+  }else if(config.voiceEngine==="kokoro"){
+    kokoroSpeechBuffer(text).then(play).catch(fail);
+  }else{
+    phone();
+  }
 }
 
 async function ask(text){
@@ -603,15 +800,16 @@ function startRecognitionOnly(){
   rec.onstart=()=>{ if(recognition===rec) status("Listening"); };
   rec.onresult=event=>{
     if(recognition!==rec) return;
-    let finalText="",interim="";
+    const finals=[];
+    let interim="";
     for(let i=event.resultIndex;i<event.results.length;i++){
       const result=event.results[i];
-      if(result.isFinal)finalText+=" "+result[0].transcript;
+      if(result.isFinal) finals.push(result[0].transcript.trim());
       else interim+=" "+result[0].transcript;
     }
     $("live").textContent=(pendingText+" "+interim).trim();
     if(busy||speaking) return;
-    if(finalText.trim()) queueSpeech(finalText.trim());
+    if(finals.length) finals.forEach(t=>{ if(t) queueSpeech(t); });
     else if(interim.trim()&&pendingText){
       /* still talking: push the send back */
       clearTimeout(sendTimer);
@@ -652,7 +850,14 @@ function stopListening(){
   status("Ready");
 }
 function queueSpeech(text){
-  pendingText=(pendingText+" "+text).trim();
+  /* Android Chrome sometimes repeats earlier words in each new result
+     ("how", "how about", "how about the..."). Merge instead of appending. */
+  const next=text.trim(),cur=pendingText;
+  const n=next.toLowerCase(),c=cur.toLowerCase();
+  if(!cur) pendingText=next;
+  else if(n.startsWith(c)) pendingText=next;
+  else if(c.includes(n)) pendingText=cur;
+  else pendingText=cur+" "+next;
   clearTimeout(sendTimer);
   sendTimer=setTimeout(flushSpeech,SILENCE_MS);
 }
@@ -690,6 +895,13 @@ function populateSettings(){
   $("provider").value=config.provider;
   $("rate").value=config.rate;
   $("pitch").value=config.pitch;
+  $("engine").value=config.voiceEngine;
+  $("kokoroVoice").value=config.kokoroVoice;
+  showKokoroStatus();
+  $("geminiVoice").value=config.geminiVoice;
+  $("ttsModel").value=config.ttsModel;
+  $("ttsLimit").value=config.ttsDailyLimit;
+  $("ttsUsed").textContent="Gemini voice replies used today: "+ttsUsage().count;
   showSliderValues();
   populateVoices();
   $("bridgeStatus").textContent=bridgeAvailable()
@@ -706,6 +918,9 @@ $("saveSettings").onclick=()=>{
   config.geminiModel=$("geminiModel").value.trim()||DEFAULTS.geminiModel;
   config.finnhubKey=$("finnhubKey").value.trim();
   config.provider=$("provider").value;
+  config.ttsModel=$("ttsModel").value.trim()||DEFAULTS.ttsModel;
+  const lim=parseInt($("ttsLimit").value,10);
+  config.ttsDailyLimit=Number.isFinite(lim)&&lim>=0?lim:DEFAULTS.ttsDailyLimit;
   save("jarvis.config",config);
   closePanel("settingsPanel");
   systemMessage("Settings saved.");
@@ -716,6 +931,19 @@ $("provider").onchange=()=>{
 };
 
 /* Voice controls save instantly so Test voice always uses what you see */
+$("engine").onchange=()=>{
+  config.voiceEngine=$("engine").value;
+  save("jarvis.config",config);
+  if(config.voiceEngine==="kokoro") startKokoroLoad();
+};
+$("kokoroVoice").onchange=()=>{
+  config.kokoroVoice=$("kokoroVoice").value;
+  save("jarvis.config",config);
+};
+$("geminiVoice").onchange=()=>{
+  config.geminiVoice=$("geminiVoice").value;
+  save("jarvis.config",config);
+};
 $("voiceSelect").onchange=()=>{
   config.voiceURI=$("voiceSelect").value;
   save("jarvis.config",config);
@@ -730,7 +958,13 @@ $("pitch").oninput=()=>{
   showSliderValues();
   save("jarvis.config",config);
 };
-$("testVoice").onclick=()=>speak("Good evening, sir. All systems are online, and I am only slightly smug about it.");
+$("testVoice").onclick=()=>{
+  config.geminiKey=$("geminiKey").value.trim()||config.geminiKey;
+  config.ttsModel=$("ttsModel").value.trim()||DEFAULTS.ttsModel;
+  save("jarvis.config",config);
+  ensureAudio();
+  speak("Good evening, sir. All systems are online, and I am only slightly smug about it.");
+};
 
 $("listen").onclick=startListening;
 $("wake").onclick=()=>{
@@ -740,6 +974,7 @@ $("wake").onclick=()=>{
 };
 $("stop").onclick=()=>{
   speakId++;
+  stopAudio();
   if("speechSynthesis" in window) speechSynthesis.cancel();
   speaking=false;
   if(listening){ startRecognitionOnly(); }
@@ -827,10 +1062,11 @@ history=Array.isArray(history)?history:[];
 memories=Array.isArray(memories)?memories:[];
 history.slice(-20).forEach(m=>addMessage(m.role==="user"?"user":"jarvis",m.content));
 if(!history.length)addMessage("jarvis","Systems online. How may I assist you, sir?");
-systemMessage("JARVIS version 2.2");
+systemMessage("JARVIS version 2.5");
 if("speechSynthesis" in window)speechSynthesis.onvoiceschanged=()=>{
   if($("settingsPanel").classList.contains("open")) populateVoices();
 };
+if(config.voiceEngine==="kokoro") startKokoroLoad();
 draw();
 </script>
 </body>
