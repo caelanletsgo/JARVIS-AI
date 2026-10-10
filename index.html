@@ -163,6 +163,8 @@ let history=load("jarvis.history",[]);
 let listening=false,wakeEnabled=true,busy=false,speaking=false;
 let recognition=null,restartTimer=null,wakeUntil=0,speakId=0;
 let wakeLock=null,installEvent=null;
+let pendingText="",sendTimer=null;
+const SILENCE_MS=1800; /* how long you must pause before Jarvis answers */
 
 const SYSTEM = `You are JARVIS, Tony Stark's butler AI from the films, now serving the user. You have a real personality: dry British wit, playful sarcasm, warmth, and the easy confidence of someone who is always three steps ahead. Talk like a charming, quick-witted person, never like a manual or a customer service bot.
 
@@ -496,6 +498,7 @@ function populateVoices(){
 function speak(text){
   if(!("speechSynthesis" in window)) return;
   const id=++speakId;
+  clearPending();
   speechSynthesis.cancel();
   const utterance=new SpeechSynthesisUtterance(text);
   const voice=getVoice();
@@ -605,8 +608,14 @@ function startRecognitionOnly(){
       if(result.isFinal)finalText+=" "+result[0].transcript;
       else interim+=" "+result[0].transcript;
     }
-    $("live").textContent=interim.trim();
-    if(finalText.trim()&&!busy&&!speaking)handleSpeech(finalText.trim());
+    $("live").textContent=(pendingText+" "+interim).trim();
+    if(busy||speaking) return;
+    if(finalText.trim()) queueSpeech(finalText.trim());
+    else if(interim.trim()&&pendingText){
+      /* still talking: push the send back */
+      clearTimeout(sendTimer);
+      sendTimer=setTimeout(flushSpeech,SILENCE_MS);
+    }
   };
   rec.onerror=event=>{
     if(event.error==="not-allowed"||event.error==="service-not-allowed"){
@@ -632,6 +641,7 @@ function stopRecognitionOnly(){
 }
 function stopListening(){
   listening=false;
+  clearPending();
   clearTimeout(restartTimer);
   stopRecognitionOnly();
   allowSleep();
@@ -639,6 +649,21 @@ function stopListening(){
   $("listen").textContent="Start listening";
   $("listen").classList.remove("active");
   status("Ready");
+}
+function queueSpeech(text){
+  pendingText=(pendingText+" "+text).trim();
+  clearTimeout(sendTimer);
+  sendTimer=setTimeout(flushSpeech,SILENCE_MS);
+}
+function flushSpeech(){
+  clearTimeout(sendTimer);
+  const text=pendingText;
+  pendingText="";
+  if(text&&!busy&&!speaking) handleSpeech(text);
+}
+function clearPending(){
+  clearTimeout(sendTimer);
+  pendingText="";
 }
 function handleSpeech(text){
   $("live").textContent="";
