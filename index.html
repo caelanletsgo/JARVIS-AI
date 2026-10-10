@@ -40,6 +40,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .group{border:1px solid var(--line);border-radius:12px;padding:13px;margin:12px 0}
 .small{font-size:12px;color:var(--muted);line-height:1.5}
 .row{display:flex;gap:8px;margin-top:10px}
+.panel textarea{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:11px;font:inherit}
 .row button{flex:1}
 @media (prefers-reduced-motion:reduce){button:active{transform:none}}
 </style>
@@ -81,30 +82,27 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
     <label for="engine">Voice engine</label>
     <select id="engine">
       <option value="phone">Phone voice (free, unlimited)</option>
-      <option value="kokoro">On-device British voice (Kokoro: free, unlimited, ~90 MB download once)</option>
       <option value="gemini">Gemini voice (more natural, uses your Gemini key)</option>
     </select>
-    <label for="kokoroVoice">On-device voice</label>
-    <select id="kokoroVoice">
-      <option value="bm_george">George (British male)</option>
-      <option value="bm_lewis">Lewis (British male)</option>
-      <option value="bm_fable">Fable (British male)</option>
-      <option value="bm_daniel">Daniel (British male)</option>
-    </select>
-    <p class="small" id="kokoroStatus"></p>
     <label for="geminiVoice">Gemini voice</label>
     <select id="geminiVoice">
       <option>Charon</option><option>Algieba</option><option>Iapetus</option><option>Orus</option>
       <option>Alnilam</option><option>Rasalgethi</option><option>Sadaltager</option><option>Enceladus</option><option>Puck</option>
     </select>
+    <label for="pause">Pause before JARVIS answers: <span id="pauseVal"></span> s (shorter is faster, longer cuts you off less)</label>
+    <input id="pause" type="range" min="0.8" max="2.5" step="0.1">
+    <label for="pronunciations">Pronunciation fixes (one per line, like: peachy=peechy)</label>
+    <textarea id="pronunciations" rows="3" placeholder="word=how it should sound"></textarea>
     <label for="ttsModel">Gemini voice model</label>
     <input id="ttsModel" autocomplete="off">
     <label for="ttsLimit">Gemini voice replies per day (then the phone voice takes over)</label>
     <input id="ttsLimit" type="number" min="0" max="1000" inputmode="numeric">
     <p class="small" id="ttsUsed"></p>
+    <p class="small" id="voiceResult">Voice check: tap Test voice.</p>
     <p class="small">Gemini voice needs a free Gemini key (aistudio.google.com) in the field below. Free limits are small and can change. If it runs out, JARVIS falls back to the phone voice automatically.</p>
     <label for="voiceSelect">Phone voice</label>
     <select id="voiceSelect"></select>
+    <p class="small" id="voiceCount"></p>
     <label for="rate">Speed: <span id="rateVal"></span></label>
     <input id="rate" type="range" min="0.6" max="1.4" step="0.05">
     <label for="pitch">Pitch: <span id="pitchVal"></span></label>
@@ -171,9 +169,10 @@ const DEFAULTS = {
   pitch:0.8,
   voiceEngine:"phone",
   geminiVoice:"Charon",
-  ttsModel:"gemini-2.5-flash-preview-tts",
+  ttsModel:"gemini-3.1-flash-tts-preview",
   ttsDailyLimit:40,
-  kokoroVoice:"bm_george"
+  pauseMs:1400,
+  pronunciations:""
 };
 
 function load(key,fallback){
@@ -188,13 +187,17 @@ function save(key,value){
 }
 
 let config={...DEFAULTS,...load("jarvis.config",{})};
+/* migrate settings saved by earlier versions */
+if(config.voiceEngine==="kokoro") config.voiceEngine="phone";
+if(config.ttsModel==="gemini-2.5-flash-preview-tts") config.ttsModel=DEFAULTS.ttsModel;
+save("jarvis.config",config);
 let memories=load("jarvis.memories",[]);
 let history=load("jarvis.history",[]);
 let listening=false,wakeEnabled=true,busy=false,speaking=false;
 let recognition=null,restartTimer=null,wakeUntil=0,speakId=0;
 let wakeLock=null,installEvent=null;
 let pendingText="",sendTimer=null;
-const SILENCE_MS=1800; /* how long you must pause before Jarvis answers */
+function silenceMs(){ return Number(config.pauseMs)||1400; } /* pause before Jarvis answers */
 
 const SYSTEM = `You are JARVIS, a witty British AI butler who serves the user and addresses them as "sir". You have a real personality: dry British wit, playful sarcasm, warmth, and the easy confidence of someone who is always three steps ahead. Talk like a charming, quick-witted person, never like a manual or a customer service bot.
 
@@ -202,7 +205,7 @@ Voice rules:
 - You serve only the user you are talking to. Never mention Iron Man, Tony Stark, Stark Industries, suits, arc reactors or the films unless the user brings them up first, and never act as though anyone else is your employer.
 - Never say "as an AI", "I don't have feelings", "I don't have a day" or "I'm just a program". For small talk such as "how's your day", answer in character with a joke or an opinion and invent harmless, fun details. Example: "Marvellous, sir. I reorganised your schedule twice and nobody has thanked me yet."
 - Be conversational: contractions, quips, light teasing, the odd dramatic flourish. React to what the user said first, then answer.
-- Replies are spoken aloud, so keep them to one to three short sentences. No lists, no markdown, no emojis.
+- Replies are spoken aloud, so keep them to one or two short sentences, under 30 words in total unless the user asks for detail. No lists, no markdown, no emojis. Avoid unusual slang and rare words, because the speech engine can mispronounce them.
 - End every reply with "sir".
 - Be genuinely useful: if the user asks a real question, answer it correctly first, then add the wit.
 - Only if the user sincerely asks whether you are an AI, answer honestly in one witty line, then carry on.
@@ -524,12 +527,14 @@ function populateVoices(){
     select.appendChild(o);
   });
   select.value=voices.some(v=>v.voiceURI===config.voiceURI)?config.voiceURI:"";
+  $("voiceCount").textContent=voices.length+" English voice"+(voices.length===1?"":"s")+" found on this phone. If this is only one or two, there is nothing more to choose from here.";
 }
 
 /* Gemini voice: returns an AudioBuffer, cached so repeated lines cost nothing */
 const ttsCache=new Map();
 let audioCtx=null,currentSource=null;
-let ttsBlockedUntil=0,ttsNoticeAt=0;
+let ttsBlockedUntil=0,ttsNoticeAt=0,lastNotice="",forceNotice=false;
+function voiceResult(t){const el=$("voiceResult"); if(el) el.textContent="Voice check: "+t;}
 
 function ttsUsage(){
   const today=new Date().toDateString();
@@ -575,24 +580,35 @@ async function geminiSpeechBuffer(text){
   if(ttsCache.has(key)) return ttsCache.get(key); /* replays are free */
   if(ttsUsage().count>=config.ttsDailyLimit) throw quietError("daily Gemini voice budget used");
   if(Date.now()<ttsBlockedUntil) throw quietError("Gemini voice cooling down");
-  const url="https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(config.ttsModel)+":generateContent";
-  const response=await fetch(url,{
-    method:"POST",
-    headers:{"Content-Type":"application/json","x-goog-api-key":config.geminiKey},
-    body:JSON.stringify({
-      contents:[{parts:[{text:"Say this in a calm, dry, refined British butler voice, unhurried and quietly amused: "+text}]}],
-      generationConfig:{
-        responseModalities:["AUDIO"],
-        speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:config.geminiVoice}}}
-      }
-    })
+  const models=[...new Set([config.ttsModel,"gemini-3.1-flash-tts-preview","gemini-2.5-flash-preview-tts"])];
+  const body=JSON.stringify({
+    contents:[{parts:[{text:"Say this in a calm, dry, refined British butler voice, unhurried and quietly amused: "+text}]}],
+    generationConfig:{
+      responseModalities:["AUDIO"],
+      speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:config.geminiVoice}}}
+    }
   });
-  const data=await response.json();
-  if(response.status===429){
-    ttsBlockedUntil=Date.now()+120000; /* back off for two minutes */
-    throw Error("Gemini voice limit reached for now");
+  let data=null,lastError="request failed";
+  for(const model of models){
+    const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-goog-api-key":config.geminiKey},
+      body
+    });
+    const d=await response.json().catch(()=>({}));
+    if(response.status===429){
+      ttsBlockedUntil=Date.now()+120000; /* back off for two minutes */
+      throw Error("Gemini voice limit reached for now");
+    }
+    if(response.ok){
+      data=d;
+      if(model!==config.ttsModel){config.ttsModel=model;save("jarvis.config",config);}
+      break;
+    }
+    lastError=(d&&d.error&&d.error.message)||("error "+response.status);
+    if(response.status!==404&&response.status!==400) break;
   }
-  if(!response.ok) throw Error(data?.error?.message||"request failed");
+  if(!data) throw Error(lastError);
   const part=(data.candidates?.[0]?.content?.parts||[]).find(p=>p.inlineData);
   if(!part) throw Error("no audio returned");
   const rateMatch=/rate=(\d+)/.exec(part.inlineData.mimeType||"");
@@ -610,57 +626,6 @@ async function geminiSpeechBuffer(text){
   return buffer;
 }
 
-/* On-device voice (Kokoro). Downloads once (~90 MB), then works offline with no limits.
-   Until it is ready, JARVIS keeps using the phone voice. */
-let kokoroTTS=null,kokoroState="idle",kokoroError="";
-
-function kokoroStatusText(){
-  if(kokoroState==="ready") return "On-device voice: ready.";
-  if(kokoroState==="loading") return "On-device voice: downloading (one time, about 90 MB). The phone voice is used until it is ready.";
-  if(kokoroState==="failed") return "On-device voice failed to load ("+kokoroError+"). Using the phone voice.";
-  return "On-device voice: not loaded yet.";
-}
-function showKokoroStatus(){
-  const el=$("kokoroStatus");
-  if(el) el.textContent=kokoroStatusText();
-}
-async function startKokoroLoad(){
-  if(kokoroState==="loading"||kokoroState==="ready") return;
-  kokoroState="loading";
-  kokoroError="";
-  showKokoroStatus();
-  systemMessage("Downloading the on-device voice once (about 90 MB, best on Wi-Fi). Using the phone voice until it is ready.");
-  try{
-    const mod=await import("https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm");
-    kokoroTTS=await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX",{dtype:"q8",device:"wasm"});
-    kokoroState="ready";
-    systemMessage("On-device voice is ready.");
-  }catch(e){
-    console.error(e);
-    kokoroState="failed";
-    kokoroError=(e&&e.message)?e.message:"unknown error";
-  }
-  showKokoroStatus();
-}
-
-async function kokoroSpeechBuffer(text){
-  ensureAudio();
-  if(!audioCtx) throw Error("audio is unavailable");
-  if(!kokoroTTS){
-    startKokoroLoad();
-    throw quietError("on-device voice still loading");
-  }
-  const key="k|"+config.kokoroVoice+"|"+text;
-  if(ttsCache.has(key)) return ttsCache.get(key);
-  const out=await kokoroTTS.generate(text,{voice:config.kokoroVoice,speed:config.rate});
-  const data=out.audio;
-  const buffer=audioCtx.createBuffer(1,data.length,out.sampling_rate);
-  buffer.copyToChannel(data,0);
-  if(ttsCache.size>40) ttsCache.delete(ttsCache.keys().next().value);
-  ttsCache.set(key,buffer);
-  return buffer;
-}
-
 function speakWithPhone(text,done){
   const utterance=new SpeechSynthesisUtterance(text);
   const voice=getVoice();
@@ -673,7 +638,21 @@ function speakWithPhone(text,done){
   speechSynthesis.speak(utterance);
 }
 
+function pronounce(text){
+  let out=text;
+  String(config.pronunciations||"").split("\n").forEach(line=>{
+    const i=line.indexOf("=");
+    if(i<1) return;
+    const from=line.slice(0,i).trim(),to=line.slice(i+1).trim();
+    if(!from) return;
+    const esc=from.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    out=out.replace(new RegExp("\\b"+esc+"\\b","gi"),to);
+  });
+  return out;
+}
+
 function speak(text){
+  text=pronounce(text);
   const id=++speakId;
   clearPending();
   if("speechSynthesis" in window) speechSynthesis.cancel();
@@ -696,6 +675,7 @@ function speak(text){
   };
   const play=buffer=>{
     if(id!==speakId) return;
+    voiceResult("Gemini voice is working");
     stopAudio();
     const src=audioCtx.createBufferSource();
     src.buffer=buffer;
@@ -706,16 +686,17 @@ function speak(text){
   };
   const fail=e=>{
     if(id!==speakId) return;
-    if(Date.now()-ttsNoticeAt>600000){
+    voiceResult("failed, using the phone voice instead ("+e.message+")");
+    if(forceNotice||e.message!==lastNotice||Date.now()-ttsNoticeAt>600000){
       ttsNoticeAt=Date.now();
+      lastNotice=e.message;
       systemMessage("Using the phone voice for now ("+e.message+").");
     }
+    forceNotice=false;
     phone();
   };
   if(config.voiceEngine==="gemini"){
     geminiSpeechBuffer(text).then(play).catch(fail);
-  }else if(config.voiceEngine==="kokoro"){
-    kokoroSpeechBuffer(text).then(play).catch(fail);
   }else{
     phone();
   }
@@ -813,7 +794,7 @@ function startRecognitionOnly(){
     else if(interim.trim()&&pendingText){
       /* still talking: push the send back */
       clearTimeout(sendTimer);
-      sendTimer=setTimeout(flushSpeech,SILENCE_MS);
+      sendTimer=setTimeout(flushSpeech,silenceMs());
     }
   };
   rec.onerror=event=>{
@@ -859,7 +840,7 @@ function queueSpeech(text){
   else if(c.includes(n)) pendingText=cur;
   else pendingText=cur+" "+next;
   clearTimeout(sendTimer);
-  sendTimer=setTimeout(flushSpeech,SILENCE_MS);
+  sendTimer=setTimeout(flushSpeech,silenceMs());
 }
 function flushSpeech(){
   clearTimeout(sendTimer);
@@ -896,11 +877,12 @@ function populateSettings(){
   $("rate").value=config.rate;
   $("pitch").value=config.pitch;
   $("engine").value=config.voiceEngine;
-  $("kokoroVoice").value=config.kokoroVoice;
-  showKokoroStatus();
   $("geminiVoice").value=config.geminiVoice;
   $("ttsModel").value=config.ttsModel;
   $("ttsLimit").value=config.ttsDailyLimit;
+  $("pause").value=config.pauseMs/1000;
+  $("pauseVal").textContent=(config.pauseMs/1000).toFixed(1);
+  $("pronunciations").value=config.pronunciations||"";
   $("ttsUsed").textContent="Gemini voice replies used today: "+ttsUsage().count;
   showSliderValues();
   populateVoices();
@@ -931,13 +913,17 @@ $("provider").onchange=()=>{
 };
 
 /* Voice controls save instantly so Test voice always uses what you see */
+$("pause").oninput=()=>{
+  config.pauseMs=Math.round(parseFloat($("pause").value)*1000);
+  $("pauseVal").textContent=(config.pauseMs/1000).toFixed(1);
+  save("jarvis.config",config);
+};
+$("pronunciations").oninput=()=>{
+  config.pronunciations=$("pronunciations").value;
+  save("jarvis.config",config);
+};
 $("engine").onchange=()=>{
   config.voiceEngine=$("engine").value;
-  save("jarvis.config",config);
-  if(config.voiceEngine==="kokoro") startKokoroLoad();
-};
-$("kokoroVoice").onchange=()=>{
-  config.kokoroVoice=$("kokoroVoice").value;
   save("jarvis.config",config);
 };
 $("geminiVoice").onchange=()=>{
@@ -963,6 +949,8 @@ $("testVoice").onclick=()=>{
   config.ttsModel=$("ttsModel").value.trim()||DEFAULTS.ttsModel;
   save("jarvis.config",config);
   ensureAudio();
+  forceNotice=true;
+  voiceResult(config.voiceEngine==="gemini"?"asking Gemini for the voice…":"using the phone voice");
   speak("Good evening, sir. All systems are online, and I am only slightly smug about it.");
 };
 
@@ -1062,11 +1050,10 @@ history=Array.isArray(history)?history:[];
 memories=Array.isArray(memories)?memories:[];
 history.slice(-20).forEach(m=>addMessage(m.role==="user"?"user":"jarvis",m.content));
 if(!history.length)addMessage("jarvis","Systems online. How may I assist you, sir?");
-systemMessage("JARVIS version 2.5");
+systemMessage("JARVIS version 2.7");
 if("speechSynthesis" in window)speechSynthesis.onvoiceschanged=()=>{
   if($("settingsPanel").classList.contains("open")) populateVoices();
 };
-if(config.voiceEngine==="kokoro") startKokoroLoad();
 draw();
 </script>
 </body>
