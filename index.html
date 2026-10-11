@@ -77,6 +77,16 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   <h2>SETTINGS</h2>
 
   <div class="group">
+    <strong>Listening</strong>
+    <label for="listenMode">Mode</label>
+    <select id="listenMode">
+      <option value="tap">Tap to talk (quiet: one beep per question, never ignores you)</option>
+      <option value="hands">Hands-free with wake word (beeps every few seconds)</option>
+    </select>
+    <p class="small">The beep is Android's own speech-recognition sound and a web page cannot turn it off. Hands-free has to restart the microphone every few seconds, which is what makes the constant beeping and the missed words. Tap to talk avoids that.</p>
+  </div>
+
+  <div class="group">
     <strong>Voice</strong>
     <p class="small">Pick the voice that sounds most like JARVIS. The list comes from your phone, so you may see a few British options. Lower pitch and a slightly slower pace give a calmer, butler-like tone.</p>
     <label for="engine">Voice engine</label>
@@ -196,7 +206,8 @@ const DEFAULTS = {
   kokoroVoice:"bm_george",
   googleClientId:"",
   contacts:"",
-  voiceMigrated:false
+  voiceMigrated:false,
+  handsFree:false
 };
 
 function load(key,fallback){
@@ -581,7 +592,7 @@ async function groqAgent(userText){
         tools:activeTools(),
         tool_choice:"auto",
         temperature:0.85,
-        max_completion_tokens:700
+        max_completion_tokens:250
       })
     });
     const data=await response.json();
@@ -730,9 +741,11 @@ document.addEventListener("pointerdown",ensureAudio);
 function stopAudio(){
   if(currentSource){
     const s=currentSource;
+    const cb=s.onended;
     currentSource=null;
     s.onended=null;
     try{s.stop();}catch{}
+    if(cb) cb();
   }
 }
 
@@ -951,6 +964,39 @@ function pronounce(text){
   return out;
 }
 
+function splitSentences(text){
+  const parts=(text.match(/[^.!?]+[.!?]*\s*/g)||[text]).map(s=>s.trim()).filter(Boolean);
+  const out=[];
+  parts.forEach(s=>{
+    if(out.length&&(s.length<25||out[out.length-1].length<25)) out[out.length-1]+=" "+s;
+    else out.push(s);
+  });
+  return out.length?out:[text];
+}
+function withTimeout(promise,ms,message){
+  return new Promise((resolve,reject)=>{
+    const t=setTimeout(()=>reject(Error(message||"timed out")),ms);
+    promise.then(v=>{clearTimeout(t);resolve(v);},e=>{clearTimeout(t);reject(e);});
+  });
+}
+function playBufferAsync(buffer){
+  return new Promise(resolve=>{
+    stopAudio();
+    const src=audioCtx.createBufferSource();
+    src.buffer=buffer;
+    src.connect(audioCtx.destination);
+    currentSource=src;
+    src.onended=()=>{ if(currentSource===src) currentSource=null; resolve(); };
+    src.start();
+  });
+}
+/* After JARVIS finishes: hands-free listens again, tap-to-talk goes quiet */
+function resumeListening(){
+  if(!listening){ status("Ready"); return; }
+  if(config.handsFree) startRecognitionOnly();
+  else stopListening();
+}
+
 function speak(text){
   text=pronounce(text);
   const id=++speakId;
@@ -962,27 +1008,24 @@ function speak(text){
   status("Speaking");
   /* Only the newest utterance may end the speaking state, otherwise a cancelled
      one fires late and turns the microphone on while JARVIS is still talking. */
+  let watchdog=null;
   const done=()=>{
     if(id!==speakId) return;
+    clearTimeout(watchdog);
     speaking=false;
     wakeUntil=Date.now()+8000;
-    if(listening) startRecognitionOnly();
-    else status("Ready");
+    resumeListening();
   };
+  /* Safety net: if any voice gets stuck, JARVIS must never stay silent forever */
+  watchdog=setTimeout(()=>{
+    if(id!==speakId) return;
+    stopAudio();
+    if("speechSynthesis" in window) speechSynthesis.cancel();
+    done();
+  },Math.max(25000,text.length*150));
   const phone=()=>{
     if("speechSynthesis" in window) speakWithPhone(text,done);
     else done();
-  };
-  const play=buffer=>{
-    if(id!==speakId) return;
-    voiceResult(config.voiceEngine==="kokoro"?"on-device voice is working":"Gemini voice is working");
-    stopAudio();
-    const src=audioCtx.createBufferSource();
-    src.buffer=buffer;
-    src.connect(audioCtx.destination);
-    currentSource=src;
-    src.onended=()=>{ if(currentSource===src) currentSource=null; done(); };
-    src.start();
   };
   const fail=e=>{
     if(id!==speakId) return;
@@ -996,9 +1039,33 @@ function speak(text){
     phone();
   };
   if(config.voiceEngine==="gemini"){
-    geminiSpeechBuffer(text).then(play).catch(fail);
+    geminiSpeechBuffer(text).then(buffer=>{
+      if(id!==speakId) return;
+      voiceResult("Gemini voice is working");
+      return playBufferAsync(buffer).then(done);
+    }).catch(fail);
   }else if(config.voiceEngine==="kokoro"){
-    kokoroSpeechBuffer(text).then(play).catch(fail);
+    /* Make every sentence at once and play each as soon as it is ready,
+       so the first words start sooner. */
+    (async()=>{
+      const parts=splitSentences(text);
+      const jobs=parts.map(part=>kokoroSpeechBuffer(part));
+      jobs.forEach(j=>j.catch(()=>{}));
+      let played=0;
+      try{
+        for(const job of jobs){
+          const buffer=await withTimeout(job,30000,"on-device voice took too long");
+          if(id!==speakId) return;
+          if(!played) voiceResult("on-device voice is working");
+          await playBufferAsync(buffer);
+          if(id!==speakId) return;
+          played++;
+        }
+        done();
+      }catch(e){
+        if(played>0){ done(); } else { fail(e); }
+      }
+    })();
   }else{
     phone();
   }
@@ -1026,7 +1093,7 @@ async function ask(text){
     addMessage("jarvis","I'm having trouble reaching my neural core, sir.");
     systemMessage(e.message);
     status("Error");
-    if(listening) startRecognitionOnly();
+    resumeListening();
   }finally{busy=false;}
 }
 
@@ -1083,6 +1150,7 @@ function startRecognitionOnly(){
   rec.onstart=()=>{ if(recognition===rec) status("Listening"); };
   rec.onresult=event=>{
     if(recognition!==rec) return;
+    resetIdleTimer();
     const finals=[];
     let interim="";
     for(let i=event.resultIndex;i<event.results.length;i++){
@@ -1107,12 +1175,24 @@ function startRecognitionOnly(){
   };
   rec.onend=()=>{
     if(recognition!==rec) return; /* an older instance ending must not restart anything */
-    if(listening&&!speaking){
+    if(!listening||speaking) return;
+    if(config.handsFree){
       clearTimeout(restartTimer);
       restartTimer=setTimeout(startRecognitionOnly,300);
+    }else if(!pendingText&&!busy){
+      stopListening(); /* tap to talk: one go, no restart, so no repeated beep */
     }
   };
+  resetIdleTimer();
   try{rec.start();}catch(e){console.debug(e);}
+}
+let idleTimer=null;
+function resetIdleTimer(){
+  clearTimeout(idleTimer);
+  if(config.handsFree) return;
+  idleTimer=setTimeout(()=>{
+    if(listening&&!pendingText&&!busy&&!speaking) stopListening();
+  },12000);
 }
 function stopRecognitionOnly(){
   if(recognition){
@@ -1123,6 +1203,7 @@ function stopRecognitionOnly(){
 }
 function stopListening(){
   listening=false;
+  clearTimeout(idleTimer);
   clearPending();
   clearTimeout(restartTimer);
   stopRecognitionOnly();
@@ -1157,7 +1238,7 @@ function clearPending(){
 function handleSpeech(text){
   $("live").textContent="";
   const hasWake=/\bjarvis\b/i.test(text);
-  if(wakeEnabled&&!hasWake&&Date.now()>wakeUntil)return;
+  if(config.handsFree&&wakeEnabled&&!hasWake&&Date.now()>wakeUntil)return;
   const command=text.replace(/^\s*(hey|okay|ok)?\s*jarvis[\s,.:!?-]*/i,"").trim();
   wakeUntil=Date.now()+8000;
   if(command)ask(command);
@@ -1178,6 +1259,7 @@ function populateSettings(){
   $("provider").value=config.provider;
   $("rate").value=config.rate;
   $("pitch").value=config.pitch;
+  $("listenMode").value=config.handsFree?"hands":"tap";
   $("engine").value=config.voiceEngine;
   $("kokoroVoice").value=config.kokoroVoice;
   $("contacts").value=config.contacts||"";
@@ -1228,6 +1310,11 @@ $("pause").oninput=()=>{
 $("pronunciations").oninput=()=>{
   config.pronunciations=$("pronunciations").value;
   save("jarvis.config",config);
+};
+$("listenMode").onchange=()=>{
+  config.handsFree=$("listenMode").value==="hands";
+  save("jarvis.config",config);
+  if(listening) stopListening();
 };
 $("engine").onchange=()=>{
   config.voiceEngine=$("engine").value;
@@ -1367,7 +1454,7 @@ history=Array.isArray(history)?history:[];
 memories=Array.isArray(memories)?memories:[];
 history.slice(-20).forEach(m=>addMessage(m.role==="user"?"user":"jarvis",m.content));
 if(!history.length)addMessage("jarvis","Systems online. How may I assist you, sir?");
-systemMessage("JARVIS version 2.8");
+systemMessage("JARVIS version 2.9");
 if("speechSynthesis" in window)speechSynthesis.onvoiceschanged=()=>{
   if($("settingsPanel").classList.contains("open")) populateVoices();
 };
