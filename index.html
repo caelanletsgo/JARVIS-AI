@@ -82,8 +82,17 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
     <label for="engine">Voice engine</label>
     <select id="engine">
       <option value="phone">Phone voice (free, unlimited)</option>
-      <option value="gemini">Gemini voice (more natural, uses your Gemini key)</option>
+      <option value="kokoro">On-device British voice (Kokoro: free, unlimited, ~90 MB download once)</option>
+      <option value="gemini">Gemini voice (uses your Gemini key, limited per day)</option>
     </select>
+    <label for="kokoroVoice">On-device voice</label>
+    <select id="kokoroVoice">
+      <option value="bm_george">George (British male)</option>
+      <option value="bm_lewis">Lewis (British male)</option>
+      <option value="bm_fable">Fable (British male)</option>
+      <option value="bm_daniel">Daniel (British male)</option>
+    </select>
+    <p class="small" id="kokoroStatus"></p>
     <label for="geminiVoice">Gemini voice</label>
     <select id="geminiVoice">
       <option>Charon</option><option>Algieba</option><option>Iapetus</option><option>Orus</option>
@@ -132,6 +141,17 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   </div>
 
   <div class="group">
+    <strong>Calls, texts and Gmail</strong>
+    <p class="small">JARVIS can open the dialer, a text, or a Gmail draft ready to send. You tap once to finish it. A web app cannot dial or send by itself.</p>
+    <label for="contacts">Contacts (one per line, like: Mum=+447700900123)</label>
+    <textarea id="contacts" rows="4" placeholder="name=phone number"></textarea>
+    <label for="googleClientId">Google OAuth client ID (for reading Gmail and saving drafts)</label>
+    <input id="googleClientId" autocomplete="off" placeholder="1234-abc.apps.googleusercontent.com">
+    <div class="row"><button id="googleConnect" type="button" class="primary">Connect Google</button></div>
+    <p class="small" id="googleStatus">Not connected. Tap Connect Google after saving the client ID. The connection lasts about an hour, then tap it again.</p>
+  </div>
+
+  <div class="group">
     <strong>Android connection</strong>
     <p id="bridgeStatus" class="small">Checking bridge…</p>
     <button id="permissions" type="button">Request Android permissions</button>
@@ -167,12 +187,16 @@ const DEFAULTS = {
   voiceURI:"",
   rate:0.95,
   pitch:0.8,
-  voiceEngine:"phone",
+  voiceEngine:"kokoro",
   geminiVoice:"Charon",
   ttsModel:"gemini-3.1-flash-tts-preview",
   ttsDailyLimit:40,
   pauseMs:1400,
-  pronunciations:""
+  pronunciations:"",
+  kokoroVoice:"bm_george",
+  googleClientId:"",
+  contacts:"",
+  voiceMigrated:false
 };
 
 function load(key,fallback){
@@ -188,7 +212,7 @@ function save(key,value){
 
 let config={...DEFAULTS,...load("jarvis.config",{})};
 /* migrate settings saved by earlier versions */
-if(config.voiceEngine==="kokoro") config.voiceEngine="phone";
+if(!config.voiceMigrated){ config.voiceEngine="kokoro"; config.voiceMigrated=true; }
 if(config.ttsModel==="gemini-2.5-flash-preview-tts") config.ttsModel=DEFAULTS.ttsModel;
 save("jarvis.config",config);
 let memories=load("jarvis.memories",[]);
@@ -210,7 +234,7 @@ Voice rules:
 - Be genuinely useful: if the user asks a real question, answer it correctly first, then add the wit.
 - Only if the user sincerely asks whether you are an AI, answer honestly in one witty line, then carry on.
 
-Tool rules: for weather call get_weather; for crypto, stock, index or company prices call market_price. Read figures exactly as the tool returns them and never guess numbers. For the S&P 500 the tool uses the SPY fund as a stand-in, so say so briefly. Use phone tools only when the user asks for phone data or app information. Never invent tool results or claim an action succeeded unless its result confirms success. If a tool is unavailable, say so honestly and with wit. Ask for confirmation before sending messages, making purchases, transferring money, placing trades or deleting data. User memories are supplied below.`;
+Tool rules: for weather call get_weather; for crypto, stock, index or company prices call market_price. Read figures exactly as the tool returns them and never guess numbers. For the S&P 500 the tool uses the SPY fund as a stand-in, so say so briefly. Use phone tools only when the user asks for phone data or app information. Never invent tool results or claim an action succeeded unless its result confirms success. If a tool is unavailable, say so honestly and with wit. For calls, texts and emails: confirm the details with the user first, then call call_contact, send_text or create_email_draft. These only open the dialer, the messages app or a Gmail draft ready for the user to tap, so say that plainly and never claim a call, text or email was sent. Use get_unread_emails to check the inbox. Ask for confirmation before making purchases, transferring money, placing trades or deleting data. User memories are supplied below.`;
 
 function addMessage(type,text){
   const el=document.createElement("div");
@@ -252,6 +276,10 @@ const tools=[
   {type:"function",function:{name:"web_search",description:"Search the web through a configured host or backend.",parameters:{type:"object",properties:{query:{type:"string"}},required:["query"],additionalProperties:false}}},
   {type:"function",function:{name:"get_weather",description:"Get current weather and today's forecast. Pass a city name, or leave empty to use the device location.",parameters:{type:"object",properties:{location:{type:"string"}},additionalProperties:false}}},
   {type:"function",function:{name:"market_price",description:"Get a live price for a cryptocurrency, stock, ETF, index or company (name or ticker). Set assetType to crypto, stock or index.",parameters:{type:"object",properties:{symbol:{type:"string"},assetType:{type:"string"}},required:["symbol"],additionalProperties:false}}},
+  {type:"function",function:{name:"call_contact",description:"Open the phone dialer for a saved contact name or a phone number. The user taps to place the call. Only after the user confirmed.",parameters:{type:"object",properties:{contact:{type:"string"}},required:["contact"],additionalProperties:false}}},
+  {type:"function",function:{name:"send_text",description:"Open a text message to a saved contact or number with the message filled in. The user taps send. Only after the user confirmed the wording.",parameters:{type:"object",properties:{contact:{type:"string"},message:{type:"string"}},required:["contact","message"],additionalProperties:false}}},
+  {type:"function",function:{name:"create_email_draft",description:"Create an email draft in Gmail (or open a prefilled Gmail compose page). The user taps send. Only after the user confirmed the wording.",parameters:{type:"object",properties:{to:{type:"string"},subject:{type:"string"},body:{type:"string"}},required:["to","subject","body"],additionalProperties:false}}},
+  {type:"function",function:{name:"get_unread_emails",description:"List the newest unread Gmail messages (sender and subject). Needs Gmail connected in Settings.",parameters:{type:"object",properties:{limit:{type:"integer"}},additionalProperties:false}}},
   {type:"function",function:{name:"remember",description:"Save a user fact or preference in JARVIS memory.",parameters:{type:"object",properties:{memory:{type:"string"}},required:["memory"],additionalProperties:false}}},
   {type:"function",function:{name:"get_memory",description:"Retrieve saved JARVIS memories.",parameters:{type:"object",properties:{},additionalProperties:false}}}
 ];
@@ -260,7 +288,7 @@ function bridgeAvailable(){
   return !!window.AndroidBridge;
 }
 function activeTools(){
-  const always=["remember","get_memory","get_weather","market_price"];
+  const always=["remember","get_memory","get_weather","market_price","call_contact","send_text","create_email_draft","get_unread_emails"];
   return tools.filter(t=>bridgeAvailable()||always.includes(t.function.name));
 }
 
@@ -362,7 +390,143 @@ async function bridgeCall(method,args={}){
   }
 }
 
+/* Calls, texts and Gmail */
+let gToken=null,gTokenExp=0;
+
+function gConnected(){ return !!gToken&&Date.now()<gTokenExp; }
+
+function findContact(query){
+  const q=String(query||"").trim();
+  if(/^[+\d][\d\s\-()]{5,}$/.test(q)) return {name:q,number:q.replace(/[^\d+]/g,"")};
+  const rows=String(config.contacts||"").split("\n").map(line=>{
+    const i=line.indexOf("=");
+    if(i<1) return null;
+    return {name:line.slice(0,i).trim(),number:line.slice(i+1).trim().replace(/[^\d+]/g,"")};
+  }).filter(r=>r&&r.name&&r.number);
+  const lower=q.toLowerCase();
+  return rows.find(r=>r.name.toLowerCase()===lower)||rows.find(r=>r.name.toLowerCase().includes(lower)||lower.includes(r.name.toLowerCase()))||null;
+}
+
+function openLink(url,label,auto){
+  const a=document.createElement("a");
+  a.href=url;
+  a.textContent=label;
+  a.className="msg system";
+  a.style.color="var(--cyan)";
+  a.target="_blank";
+  a.rel="noopener";
+  $("chat").appendChild(a);
+  $("chat").scrollTop=$("chat").scrollHeight;
+  if(auto){ try{ window.open(url,"_blank"); }catch(e){console.debug(e);} }
+}
+
+function utf8bin(str){
+  const bytes=new TextEncoder().encode(str);
+  let bin="";
+  bytes.forEach(b=>{bin+=String.fromCharCode(b);});
+  return bin;
+}
+function b64url(str){
+  return btoa(utf8bin(str)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function encodeSubject(s){
+  return /^[\x20-\x7e]*$/.test(s)?s:"=?UTF-8?B?"+btoa(utf8bin(s))+"?=";
+}
+
+async function gmailFetch(url,options){
+  const response=await fetch(url,{...options,headers:{Authorization:"Bearer "+gToken,"Content-Type":"application/json",...(options&&options.headers)}});
+  const data=await response.json().catch(()=>({}));
+  if(response.status===401){ gToken=null; throw Error("Gmail connection expired. Tap Connect Google in Settings."); }
+  if(!response.ok) throw Error((data.error&&data.error.message)||("Gmail error "+response.status));
+  return data;
+}
+
+function loadGoogleSignIn(){
+  return new Promise((resolve,reject)=>{
+    if(window.google&&google.accounts&&google.accounts.oauth2) return resolve();
+    const s=document.createElement("script");
+    s.src="https://accounts.google.com/gsi/client";
+    s.onload=resolve;
+    s.onerror=()=>reject(Error("Could not load Google sign-in."));
+    document.head.appendChild(s);
+  });
+}
+
+async function googleConnect(){
+  const id=$("googleClientId").value.trim();
+  if(!id){ $("googleStatus").textContent="Paste your Google client ID first."; return; }
+  config.googleClientId=id;
+  save("jarvis.config",config);
+  try{
+    await loadGoogleSignIn();
+    const client=google.accounts.oauth2.initTokenClient({
+      client_id:id,
+      scope:"https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
+      callback:r=>{
+        if(r.error){ $("googleStatus").textContent="Google said: "+r.error; return; }
+        gToken=r.access_token;
+        gTokenExp=Date.now()+((r.expires_in||3600)-120)*1000;
+        $("googleStatus").textContent="Connected to Google for about an hour.";
+      },
+      error_callback:e=>{ $("googleStatus").textContent="Sign-in did not finish ("+(e&&e.type||"cancelled")+")."; }
+    });
+    client.requestAccessToken();
+  }catch(e){
+    $("googleStatus").textContent=e.message;
+  }
+}
+
+async function actionTool(name,args){
+  if(name==="call_contact"){
+    const c=findContact(args.contact);
+    if(!c) return {success:false,error:"No saved contact or number matches '"+args.contact+"'. Ask the user for the number or to add the contact in Settings."};
+    openLink("tel:"+c.number,"Tap to call "+c.name,true);
+    return {success:true,note:"The dialer is open for "+c.name+". The user still has to tap call."};
+  }
+  if(name==="send_text"){
+    const c=findContact(args.contact);
+    if(!c) return {success:false,error:"No saved contact or number matches '"+args.contact+"'."};
+    openLink("sms:"+c.number+"?body="+encodeURIComponent(String(args.message||"")),"Tap to open text to "+c.name,true);
+    return {success:true,note:"A text to "+c.name+" is ready in the messages app. The user still has to tap send."};
+  }
+  if(name==="create_email_draft"){
+    const to=String(args.to||"").trim(),subject=String(args.subject||""),body=String(args.body||"");
+    if(gConnected()){
+      try{
+        const raw=b64url("To: "+to+"\r\nSubject: "+encodeSubject(subject)+"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"+body);
+        await gmailFetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts",{method:"POST",body:JSON.stringify({message:{raw}})});
+        return {success:true,note:"Draft saved in Gmail. The user still has to open it and tap send."};
+      }catch(e){
+        return {success:false,error:e.message};
+      }
+    }
+    const url="https://mail.google.com/mail/?view=cm&fs=1&to="+encodeURIComponent(to)+"&su="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+    openLink(url,"Tap to open the Gmail draft to "+(to||"recipient"),true);
+    return {success:true,note:"A prefilled Gmail compose page is ready. The user still has to tap send. Connecting Google in Settings would save drafts directly."};
+  }
+  if(name==="get_unread_emails"){
+    if(!gConnected()) return {success:false,error:"Gmail is not connected. Ask the user to tap Connect Google in Settings."};
+    try{
+      const n=Math.min(Math.max(parseInt(args.limit,10)||5,1),10);
+      const list=await gmailFetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?q="+encodeURIComponent("is:unread in:inbox")+"&maxResults="+n);
+      const ids=(list.messages||[]).map(m=>m.id);
+      const messages=[];
+      for(const id of ids){
+        const m=await gmailFetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+id+"?format=metadata&metadataHeaders=From&metadataHeaders=Subject");
+        const header=k=>((m.payload&&m.payload.headers)||[]).find(x=>x.name.toLowerCase()===k.toLowerCase());
+        messages.push({from:header("From")?header("From").value:"",subject:header("Subject")?header("Subject").value:"",snippet:m.snippet||""});
+      }
+      return {success:true,unread_estimate:list.resultSizeEstimate||0,messages};
+    }catch(e){
+      return {success:false,error:e.message};
+    }
+  }
+  return null;
+}
+
 async function executeTool(name,args){
+  const action=await actionTool(name,args);
+  if(action) return action;
   if(name==="remember"){
     const item=String(args.memory||"").trim();
     if(item && !memories.includes(item)){
@@ -626,6 +790,142 @@ async function geminiSpeechBuffer(text){
   return buffer;
 }
 
+/* On-device British voice (Kokoro). Downloads once (about 90 MB), then needs no internet and has no limits.
+   It runs in a background worker so the screen does not freeze. Until it is ready the phone voice is used. */
+const KOKORO_URL="https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm";
+const KOKORO_MODEL="onnx-community/Kokoro-82M-v1.0-ONNX";
+let kokoroWorker=null,kokoroTTS=null,kokoroState="idle",kokoroError="",kokoroProgress=0,kokoroSeq=0,kokoroTriedMain=false;
+const kokoroPending=new Map();
+
+function kokoroWorkerSource(){
+  return [
+    'import { KokoroTTS } from "'+KOKORO_URL+'";',
+    'let tts=null;',
+    'self.onmessage=async e=>{',
+    '  const m=e.data;',
+    '  try{',
+    '    if(m.type==="load"){',
+    '      tts=await KokoroTTS.from_pretrained("'+KOKORO_MODEL+'",{dtype:"q8",device:"wasm",progress_callback:p=>{',
+    '        if(p&&p.status==="progress") self.postMessage({type:"progress",progress:p.progress});',
+    '      }});',
+    '      self.postMessage({type:"ready"});',
+    '    }else if(m.type==="speak"){',
+    '      const out=await tts.generate(m.text,{voice:m.voice,speed:m.speed});',
+    '      const data=out.audio;',
+    '      self.postMessage({type:"audio",id:m.id,data,rate:out.sampling_rate},[data.buffer]);',
+    '    }',
+    '  }catch(err){',
+    '    self.postMessage({type:"error",id:m.id,message:String((err&&err.message)||err)});',
+    '  }',
+    '};'
+  ].join("\n");
+}
+
+function kokoroStatusText(){
+  if(kokoroState==="ready") return "On-device voice: ready.";
+  if(kokoroState==="loading") return "On-device voice: downloading"+(kokoroProgress?" ("+kokoroProgress+"%)":"")+". One time only, best on Wi-Fi. The phone voice is used until it is ready.";
+  if(kokoroState==="failed") return "On-device voice failed to load ("+kokoroError+"). Using the phone voice.";
+  return "On-device voice: not loaded yet.";
+}
+function showKokoroStatus(){
+  const el=$("kokoroStatus");
+  if(el) el.textContent=kokoroStatusText();
+}
+
+async function startKokoroMainThread(){
+  kokoroTriedMain=true;
+  try{
+    const mod=await import(KOKORO_URL);
+    kokoroTTS=await mod.KokoroTTS.from_pretrained(KOKORO_MODEL,{dtype:"q8",device:"wasm"});
+    kokoroWorker=null;
+    kokoroState="ready";
+    systemMessage("On-device voice is ready.");
+  }catch(e){
+    console.error(e);
+    kokoroState="failed";
+    kokoroError=(e&&e.message)?e.message:"unknown error";
+  }
+  showKokoroStatus();
+}
+
+function kokoroLoadFailed(message){
+  kokoroError=message||"unknown error";
+  if(!kokoroTriedMain){
+    startKokoroMainThread(); /* worker did not work on this phone: try the plain way */
+  }else{
+    kokoroState="failed";
+    showKokoroStatus();
+  }
+}
+
+function startKokoroLoad(){
+  if(kokoroState==="loading"||kokoroState==="ready") return;
+  kokoroState="loading";
+  kokoroError="";
+  kokoroProgress=0;
+  showKokoroStatus();
+  systemMessage("Getting the on-device voice (about 90 MB, one time, best on Wi-Fi). The phone voice is used until it is ready.");
+  try{
+    const blob=new Blob([kokoroWorkerSource()],{type:"text/javascript"});
+    kokoroWorker=new Worker(URL.createObjectURL(blob),{type:"module"});
+  }catch(e){
+    kokoroLoadFailed(e.message);
+    return;
+  }
+  kokoroWorker.onmessage=e=>{
+    const m=e.data;
+    if(m.type==="progress"){
+      kokoroProgress=Math.max(kokoroProgress,Math.round(m.progress||0));
+      showKokoroStatus();
+    }else if(m.type==="ready"){
+      kokoroState="ready";
+      showKokoroStatus();
+      systemMessage("On-device voice is ready.");
+    }else if(m.type==="audio"){
+      const r=kokoroPending.get(m.id);
+      if(r){ kokoroPending.delete(m.id); r.resolve(m); }
+    }else if(m.type==="error"){
+      const r=kokoroPending.get(m.id);
+      if(r){ kokoroPending.delete(m.id); r.reject(Error(m.message)); }
+      else if(kokoroState==="loading"){ kokoroLoadFailed(m.message); }
+    }
+  };
+  kokoroWorker.onerror=e=>{
+    if(kokoroState==="loading") kokoroLoadFailed((e&&e.message)||"the voice worker could not start");
+  };
+  kokoroWorker.postMessage({type:"load"});
+}
+
+async function kokoroSpeechBuffer(text){
+  ensureAudio();
+  if(!audioCtx) throw Error("audio is unavailable");
+  if(kokoroState!=="ready"){
+    startKokoroLoad();
+    throw quietError("on-device voice still loading");
+  }
+  const key="k|"+config.kokoroVoice+"|"+config.rate+"|"+text;
+  if(ttsCache.has(key)) return ttsCache.get(key);
+  let data,rate;
+  if(kokoroWorker){
+    const m=await new Promise((resolve,reject)=>{
+      const id=++kokoroSeq;
+      kokoroPending.set(id,{resolve,reject});
+      kokoroWorker.postMessage({type:"speak",id,text,voice:config.kokoroVoice,speed:config.rate});
+    });
+    data=m.data;
+    rate=m.rate;
+  }else{
+    const out=await kokoroTTS.generate(text,{voice:config.kokoroVoice,speed:config.rate});
+    data=out.audio;
+    rate=out.sampling_rate;
+  }
+  const buffer=audioCtx.createBuffer(1,data.length,rate);
+  buffer.copyToChannel(data,0);
+  if(ttsCache.size>40) ttsCache.delete(ttsCache.keys().next().value);
+  ttsCache.set(key,buffer);
+  return buffer;
+}
+
 function speakWithPhone(text,done){
   const utterance=new SpeechSynthesisUtterance(text);
   const voice=getVoice();
@@ -675,7 +975,7 @@ function speak(text){
   };
   const play=buffer=>{
     if(id!==speakId) return;
-    voiceResult("Gemini voice is working");
+    voiceResult(config.voiceEngine==="kokoro"?"on-device voice is working":"Gemini voice is working");
     stopAudio();
     const src=audioCtx.createBufferSource();
     src.buffer=buffer;
@@ -697,6 +997,8 @@ function speak(text){
   };
   if(config.voiceEngine==="gemini"){
     geminiSpeechBuffer(text).then(play).catch(fail);
+  }else if(config.voiceEngine==="kokoro"){
+    kokoroSpeechBuffer(text).then(play).catch(fail);
   }else{
     phone();
   }
@@ -877,6 +1179,10 @@ function populateSettings(){
   $("rate").value=config.rate;
   $("pitch").value=config.pitch;
   $("engine").value=config.voiceEngine;
+  $("kokoroVoice").value=config.kokoroVoice;
+  $("contacts").value=config.contacts||"";
+  $("googleClientId").value=config.googleClientId||"";
+  showKokoroStatus();
   $("geminiVoice").value=config.geminiVoice;
   $("ttsModel").value=config.ttsModel;
   $("ttsLimit").value=config.ttsDailyLimit;
@@ -900,6 +1206,7 @@ $("saveSettings").onclick=()=>{
   config.geminiModel=$("geminiModel").value.trim()||DEFAULTS.geminiModel;
   config.finnhubKey=$("finnhubKey").value.trim();
   config.provider=$("provider").value;
+  config.googleClientId=$("googleClientId").value.trim();
   config.ttsModel=$("ttsModel").value.trim()||DEFAULTS.ttsModel;
   const lim=parseInt($("ttsLimit").value,10);
   config.ttsDailyLimit=Number.isFinite(lim)&&lim>=0?lim:DEFAULTS.ttsDailyLimit;
@@ -925,7 +1232,17 @@ $("pronunciations").oninput=()=>{
 $("engine").onchange=()=>{
   config.voiceEngine=$("engine").value;
   save("jarvis.config",config);
+  if(config.voiceEngine==="kokoro") startKokoroLoad();
 };
+$("kokoroVoice").onchange=()=>{
+  config.kokoroVoice=$("kokoroVoice").value;
+  save("jarvis.config",config);
+};
+$("contacts").oninput=()=>{
+  config.contacts=$("contacts").value;
+  save("jarvis.config",config);
+};
+$("googleConnect").onclick=googleConnect;
 $("geminiVoice").onchange=()=>{
   config.geminiVoice=$("geminiVoice").value;
   save("jarvis.config",config);
@@ -1050,10 +1367,11 @@ history=Array.isArray(history)?history:[];
 memories=Array.isArray(memories)?memories:[];
 history.slice(-20).forEach(m=>addMessage(m.role==="user"?"user":"jarvis",m.content));
 if(!history.length)addMessage("jarvis","Systems online. How may I assist you, sir?");
-systemMessage("JARVIS version 2.7");
+systemMessage("JARVIS version 2.8");
 if("speechSynthesis" in window)speechSynthesis.onvoiceschanged=()=>{
   if($("settingsPanel").classList.contains("open")) populateVoices();
 };
+if(config.voiceEngine==="kokoro") startKokoroLoad();
 draw();
 </script>
 </body>
