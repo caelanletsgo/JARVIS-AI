@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>JARVIS</title>
+<title>OLIVER</title>
 <style>
 :root{--bg:#040a11;--panel:#081722;--line:#174057;--cyan:#5fe3ff;--text:#d7f3ff;--muted:#7d9eaf}
 *{box-sizing:border-box}
@@ -47,7 +47,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 </head>
 <body>
 <header>
-  <h1>JARVIS</h1>
+  <h1>OLIVER</h1>
   <select id="provider" aria-label="AI provider">
     <option value="groq">Groq</option>
     <option value="gemini">Gemini</option>
@@ -69,7 +69,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 </div>
 
 <form id="entry">
-  <input id="prompt" placeholder="Talk to JARVIS..." autocomplete="off">
+  <input id="prompt" placeholder="Talk to OLIVER..." autocomplete="off">
   <button class="primary">Send</button>
 </form>
 
@@ -80,15 +80,16 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
     <strong>Listening</strong>
     <label for="listenMode">Mode</label>
     <select id="listenMode">
-      <option value="tap">Tap to talk (quiet: one beep per question, never ignores you)</option>
-      <option value="hands">Hands-free with wake word (beeps every few seconds)</option>
+      <option value="always">Always listening, no beep (uses your Groq key for speech to text)</option>
+      <option value="tap">Tap to talk (one beep per question)</option>
+      <option value="hands">Old hands-free (Android beeps every few seconds)</option>
     </select>
-    <p class="small">The beep is Android's own speech-recognition sound and a web page cannot turn it off. Hands-free has to restart the microphone every few seconds, which is what makes the constant beeping and the missed words. Tap to talk avoids that.</p>
+    <p class="small">Always listening uses its own microphone and voice detection, so there is no beep. It sends only your speech, after you pause, to Groq for transcription (free limits apply). Keep the screen on and the app open. Say "Oliver" first, or turn Wake word OFF to answer everything you say.</p>
   </div>
 
   <div class="group">
     <strong>Voice</strong>
-    <p class="small">Pick the voice that sounds most like JARVIS. The list comes from your phone, so you may see a few British options. Lower pitch and a slightly slower pace give a calmer, butler-like tone.</p>
+    <p class="small">Pick the voice that sounds most like OLIVER. The list comes from your phone, so you may see a few British options. Lower pitch and a slightly slower pace give a calmer, butler-like tone.</p>
     <label for="engine">Voice engine</label>
     <select id="engine">
       <option value="phone">Phone voice (free, unlimited)</option>
@@ -108,7 +109,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
       <option>Charon</option><option>Algieba</option><option>Iapetus</option><option>Orus</option>
       <option>Alnilam</option><option>Rasalgethi</option><option>Sadaltager</option><option>Enceladus</option><option>Puck</option>
     </select>
-    <label for="pause">Pause before JARVIS answers: <span id="pauseVal"></span> s (shorter is faster, longer cuts you off less)</label>
+    <label for="pause">Pause before OLIVER answers: <span id="pauseVal"></span> s (shorter is faster, longer cuts you off less)</label>
     <input id="pause" type="range" min="0.8" max="2.5" step="0.1">
     <label for="pronunciations">Pronunciation fixes (one per line, like: peachy=peechy)</label>
     <textarea id="pronunciations" rows="3" placeholder="word=how it should sound"></textarea>
@@ -118,7 +119,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
     <input id="ttsLimit" type="number" min="0" max="1000" inputmode="numeric">
     <p class="small" id="ttsUsed"></p>
     <p class="small" id="voiceResult">Voice check: tap Test voice.</p>
-    <p class="small">Gemini voice needs a free Gemini key (aistudio.google.com) in the field below. Free limits are small and can change. If it runs out, JARVIS falls back to the phone voice automatically.</p>
+    <p class="small">Gemini voice needs a free Gemini key (aistudio.google.com) in the field below. Free limits are small and can change. If it runs out, OLIVER falls back to the phone voice automatically.</p>
     <label for="voiceSelect">Phone voice</label>
     <select id="voiceSelect"></select>
     <p class="small" id="voiceCount"></p>
@@ -146,13 +147,13 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 
   <div class="group" id="installGroup" style="display:none">
     <strong>Install</strong>
-    <p class="small">Add JARVIS to your home screen so it opens full screen like an app.</p>
+    <p class="small">Add OLIVER to your home screen so it opens full screen like an app.</p>
     <button id="installBtn" type="button" class="primary">Install app</button>
   </div>
 
   <div class="group">
     <strong>Calls, texts and Gmail</strong>
-    <p class="small">JARVIS can open the dialer, a text, or a Gmail draft ready to send. You tap once to finish it. A web app cannot dial or send by itself.</p>
+    <p class="small">OLIVER can open the dialer, a text, or a Gmail draft ready to send. You tap once to finish it. A web app cannot dial or send by itself.</p>
     <label for="contacts">Contacts (one per line, like: Mum=+447700900123)</label>
     <textarea id="contacts" rows="4" placeholder="name=phone number"></textarea>
     <label for="googleClientId">Google OAuth client ID (for reading Gmail and saving drafts)</label>
@@ -178,7 +179,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 </div>
 
 <div id="memoryPanel" class="panel">
-  <h2>JARVIS MEMORY</h2>
+  <h2>OLIVER MEMORY</h2>
   <div id="memoryList"></div>
   <button id="closeMemory">Close</button>
 </div>
@@ -207,7 +208,8 @@ const DEFAULTS = {
   googleClientId:"",
   contacts:"",
   voiceMigrated:false,
-  handsFree:false
+  listenMode:"always",
+  listenMigrated:false
 };
 
 function load(key,fallback){
@@ -223,6 +225,7 @@ function save(key,value){
 
 let config={...DEFAULTS,...load("jarvis.config",{})};
 /* migrate settings saved by earlier versions */
+if(!config.listenMigrated){ config.listenMode="always"; config.listenMigrated=true; }
 if(!config.voiceMigrated){ config.voiceEngine="kokoro"; config.voiceMigrated=true; }
 if(config.ttsModel==="gemini-2.5-flash-preview-tts") config.ttsModel=DEFAULTS.ttsModel;
 save("jarvis.config",config);
@@ -232,9 +235,9 @@ let listening=false,wakeEnabled=true,busy=false,speaking=false;
 let recognition=null,restartTimer=null,wakeUntil=0,speakId=0;
 let wakeLock=null,installEvent=null;
 let pendingText="",sendTimer=null;
-function silenceMs(){ return Number(config.pauseMs)||1400; } /* pause before Jarvis answers */
+function silenceMs(){ return Number(config.pauseMs)||1400; } /* pause before Oliver answers */
 
-const SYSTEM = `You are JARVIS, a witty British AI butler who serves the user and addresses them as "sir". You have a real personality: dry British wit, playful sarcasm, warmth, and the easy confidence of someone who is always three steps ahead. Talk like a charming, quick-witted person, never like a manual or a customer service bot.
+const SYSTEM = `You are OLIVER, which stands for Optimised Logic for Intelligent Virtual Execution and Reasoning, a witty British AI butler who serves the user and addresses them as "sir". If asked what your name means, give the full expansion with a flourish. You have a real personality: dry British wit, playful sarcasm, warmth, and the easy confidence of someone who is always three steps ahead. Talk like a charming, quick-witted person, never like a manual or a customer service bot.
 
 Voice rules:
 - You serve only the user you are talking to. Never mention Iron Man, Tony Stark, Stark Industries, suits, arc reactors or the films unless the user brings them up first, and never act as though anyone else is your employer.
@@ -291,8 +294,8 @@ const tools=[
   {type:"function",function:{name:"send_text",description:"Open a text message to a saved contact or number with the message filled in. The user taps send. Only after the user confirmed the wording.",parameters:{type:"object",properties:{contact:{type:"string"},message:{type:"string"}},required:["contact","message"],additionalProperties:false}}},
   {type:"function",function:{name:"create_email_draft",description:"Create an email draft in Gmail (or open a prefilled Gmail compose page). The user taps send. Only after the user confirmed the wording.",parameters:{type:"object",properties:{to:{type:"string"},subject:{type:"string"},body:{type:"string"}},required:["to","subject","body"],additionalProperties:false}}},
   {type:"function",function:{name:"get_unread_emails",description:"List the newest unread Gmail messages (sender and subject). Needs Gmail connected in Settings.",parameters:{type:"object",properties:{limit:{type:"integer"}},additionalProperties:false}}},
-  {type:"function",function:{name:"remember",description:"Save a user fact or preference in JARVIS memory.",parameters:{type:"object",properties:{memory:{type:"string"}},required:["memory"],additionalProperties:false}}},
-  {type:"function",function:{name:"get_memory",description:"Retrieve saved JARVIS memories.",parameters:{type:"object",properties:{},additionalProperties:false}}}
+  {type:"function",function:{name:"remember",description:"Save a user fact or preference in OLIVER memory.",parameters:{type:"object",properties:{memory:{type:"string"}},required:["memory"],additionalProperties:false}}},
+  {type:"function",function:{name:"get_memory",description:"Retrieve saved OLIVER memories.",parameters:{type:"object",properties:{},additionalProperties:false}}}
 ];
 
 function bridgeAvailable(){
@@ -418,6 +421,20 @@ function findContact(query){
   return rows.find(r=>r.name.toLowerCase()===lower)||rows.find(r=>r.name.toLowerCase().includes(lower)||lower.includes(r.name.toLowerCase()))||null;
 }
 
+async function resolveContact(query){
+  const local=findContact(query);
+  if(local) return local;
+  if(bridgeAvailable()){
+    const r=await bridgeCall("findContact",{name:String(query||"")});
+    if(r&&r.success&&r.matches&&r.matches.length){
+      const names=[...new Set(r.matches.map(m=>m.name))];
+      if(names.length>1) return {ambiguous:names};
+      return r.matches[0];
+    }
+  }
+  return null;
+}
+
 function openLink(url,label,auto){
   const a=document.createElement("a");
   a.href=url;
@@ -489,19 +506,24 @@ async function googleConnect(){
 
 async function actionTool(name,args){
   if(name==="call_contact"){
-    const c=findContact(args.contact);
+    const c=await resolveContact(args.contact);
+    if(c&&c.ambiguous) return {success:false,error:"Several contacts match: "+c.ambiguous.join(", ")+". Ask the user which one."};
+    if(c&&bridgeAvailable()) return bridgeCall("call",{name:c.name,number:c.number});
     if(!c) return {success:false,error:"No saved contact or number matches '"+args.contact+"'. Ask the user for the number or to add the contact in Settings."};
     openLink("tel:"+c.number,"Tap to call "+c.name,true);
     return {success:true,note:"The dialer is open for "+c.name+". The user still has to tap call."};
   }
   if(name==="send_text"){
-    const c=findContact(args.contact);
+    const c=await resolveContact(args.contact);
+    if(c&&c.ambiguous) return {success:false,error:"Several contacts match: "+c.ambiguous.join(", ")+". Ask the user which one."};
+    if(c&&bridgeAvailable()) return bridgeCall("sendSms",{name:c.name,number:c.number,message:String(args.message||"")});
     if(!c) return {success:false,error:"No saved contact or number matches '"+args.contact+"'."};
     openLink("sms:"+c.number+"?body="+encodeURIComponent(String(args.message||"")),"Tap to open text to "+c.name,true);
     return {success:true,note:"A text to "+c.name+" is ready in the messages app. The user still has to tap send."};
   }
   if(name==="create_email_draft"){
     const to=String(args.to||"").trim(),subject=String(args.subject||""),body=String(args.body||"");
+    if(bridgeAvailable()) return bridgeCall("composeEmail",{to,subject,body});
     if(gConnected()){
       try{
         const raw=b64url("To: "+to+"\r\nSubject: "+encodeSubject(subject)+"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"+body);
@@ -599,7 +621,14 @@ async function groqAgent(userText){
     if(!response.ok) throw Error(data?.error?.message||"Groq request failed.");
     const message=data.choices?.[0]?.message;
     if(!message) throw Error("No response from Groq.");
-    if(!message.tool_calls?.length) return message.content||"";
+    if(!message.tool_calls?.length){
+      if(String(message.content||"").trim()) return message.content;
+      if(i<5){
+        messages.push({role:"user",content:"Reply to the user now in one short sentence, in character."});
+        continue;
+      }
+      return "";
+    }
 
     messages.push(message);
     for(const call of message.tool_calls){
@@ -657,7 +686,15 @@ async function geminiAsk(userText){
     const content=data.candidates?.[0]?.content;
     const parts=content?.parts||[];
     const calls=parts.filter(p=>p.functionCall);
-    if(!calls.length) return parts.map(p=>p.text||"").join("");
+    if(!calls.length){
+      const t=parts.map(p=>p.text||"").join("");
+      if(t.trim()) return t;
+      if(i<5){
+        contents.push({role:"user",parts:[{text:"Reply to the user now in one short sentence, in character."}]});
+        continue;
+      }
+      return t;
+    }
 
     contents.push(content);
     const replies=[];
@@ -707,7 +744,7 @@ function populateVoices(){
 
 /* Gemini voice: returns an AudioBuffer, cached so repeated lines cost nothing */
 const ttsCache=new Map();
-let audioCtx=null,currentSource=null;
+let audioCtx=null,currentSource=null,playAnalyser=null,waveBuf=null;
 let ttsBlockedUntil=0,ttsNoticeAt=0,lastNotice="",forceNotice=false;
 function voiceResult(t){const el=$("voiceResult"); if(el) el.textContent="Voice check: "+t;}
 
@@ -731,7 +768,13 @@ function ensureAudio(){
   try{
     if(!audioCtx){
       const AC=window.AudioContext||window.webkitAudioContext;
-      if(AC) audioCtx=new AC();
+      if(AC){
+        audioCtx=new AC();
+        playAnalyser=audioCtx.createAnalyser();
+        playAnalyser.fftSize=512;
+        playAnalyser.connect(audioCtx.destination);
+        waveBuf=new Uint8Array(playAnalyser.fftSize);
+      }
     }
     if(audioCtx&&audioCtx.state==="suspended") audioCtx.resume();
   }catch(e){console.debug(e);}
@@ -946,6 +989,7 @@ function speakWithPhone(text,done){
   utterance.lang=voice?voice.lang:"en-GB";
   utterance.rate=config.rate;
   utterance.pitch=config.pitch;
+  utterance.onboundary=()=>{ phonePulse=1; }; /* phone voice: flap the mouth on each word */
   utterance.onend=done;
   utterance.onerror=done;
   speechSynthesis.speak(utterance);
@@ -984,16 +1028,17 @@ function playBufferAsync(buffer){
     stopAudio();
     const src=audioCtx.createBufferSource();
     src.buffer=buffer;
-    src.connect(audioCtx.destination);
+    src.connect(playAnalyser||audioCtx.destination);
     currentSource=src;
     src.onended=()=>{ if(currentSource===src) currentSource=null; resolve(); };
     src.start();
   });
 }
-/* After JARVIS finishes: hands-free listens again, tap-to-talk goes quiet */
+/* After OLIVER finishes: hands-free listens again, tap-to-talk goes quiet */
 function resumeListening(){
   if(!listening){ status("Ready"); return; }
-  if(config.handsFree) startRecognitionOnly();
+  if(config.listenMode==="always"){ Q.mutedUntil=Date.now()+700; status("Listening"); }
+  else if(config.listenMode==="hands") startRecognitionOnly();
   else stopListening();
 }
 
@@ -1007,7 +1052,7 @@ function speak(text){
   if(listening) stopRecognitionOnly();
   status("Speaking");
   /* Only the newest utterance may end the speaking state, otherwise a cancelled
-     one fires late and turns the microphone on while JARVIS is still talking. */
+     one fires late and turns the microphone on while OLIVER is still talking. */
   let watchdog=null;
   const done=()=>{
     if(id!==speakId) return;
@@ -1016,7 +1061,7 @@ function speak(text){
     wakeUntil=Date.now()+8000;
     resumeListening();
   };
-  /* Safety net: if any voice gets stuck, JARVIS must never stay silent forever */
+  /* Safety net: if any voice gets stuck, OLIVER must never stay silent forever */
   watchdog=setTimeout(()=>{
     if(id!==speakId) return;
     stopAudio();
@@ -1120,6 +1165,7 @@ function recognitionAPI(){
 }
 async function startListening(){
   if(listening){stopListening();return;}
+  if(config.listenMode==="always"){ await startQuietListening(); return; }
   const API=recognitionAPI();
   if(!API){systemMessage("Speech recognition is unavailable. Try Chrome on Android.");return;}
   try{
@@ -1137,6 +1183,140 @@ async function startListening(){
   keepAwake();
   startRecognitionOnly();
 }
+/* Always listening with no beep: our own microphone + voice detection,
+   speech transcribed by Groq Whisper. Android's beep only comes from the browser's
+   built-in recognition, which this avoids. */
+const Q={ctx:null,stream:null,src:null,node:null,pre:[],buf:[],active:false,voiceFrames:0,silence:0,frames:0,noise:0.01,working:false,mutedUntil:0};
+function resetQuiet(){ Q.pre=[]; Q.buf=[]; Q.active=false; Q.voiceFrames=0; Q.silence=0; Q.frames=0; }
+
+function toWav16k(chunks,sampleRate){
+  let len=0;
+  chunks.forEach(c=>{len+=c.length;});
+  const all=new Float32Array(len);
+  let o=0;
+  chunks.forEach(c=>{all.set(c,o);o+=c.length;});
+  const ratio=sampleRate/16000;
+  const outLen=Math.floor(all.length/ratio);
+  const pcm=new Int16Array(outLen);
+  for(let i=0;i<outLen;i++){
+    const pos=i*ratio,i0=Math.floor(pos),i1=Math.min(i0+1,all.length-1),f=pos-i0;
+    const v=all[i0]*(1-f)+all[i1]*f;
+    pcm[i]=Math.max(-1,Math.min(1,v))*32767;
+  }
+  const buffer=new ArrayBuffer(44+pcm.length*2);
+  const view=new DataView(buffer);
+  const str=(off,s)=>{for(let i=0;i<s.length;i++) view.setUint8(off+i,s.charCodeAt(i));};
+  str(0,"RIFF"); view.setUint32(4,36+pcm.length*2,true); str(8,"WAVE"); str(12,"fmt ");
+  view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true);
+  view.setUint32(24,16000,true); view.setUint32(28,32000,true); view.setUint16(32,2,true); view.setUint16(34,16,true);
+  str(36,"data"); view.setUint32(40,pcm.length*2,true);
+  new Int16Array(buffer,44).set(pcm);
+  return buffer;
+}
+
+async function transcribeAndAsk(chunks,sampleRate){
+  Q.working=true;
+  $("live").textContent="Transcribing…";
+  try{
+    const form=new FormData();
+    form.append("file",new Blob([toWav16k(chunks,sampleRate)],{type:"audio/wav"}),"speech.wav");
+    form.append("model","whisper-large-v3-turbo");
+    form.append("language","en");
+    form.append("temperature","0");
+    form.append("prompt","Oliver");
+    const r=await fetch("https://api.groq.com/openai/v1/audio/transcriptions",{
+      method:"POST",
+      headers:{Authorization:"Bearer "+config.groqKey},
+      body:form
+    });
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw Error((d.error&&d.error.message)||("error "+r.status));
+    const text=String(d.text||"").trim();
+    $("live").textContent="";
+    /* Whisper sometimes invents these on near-silence */
+    if(text.length>1&&!/^(thank you\.?|thanks for watching\.?|you\.?|bye\.?|\.+)$/i.test(text)) handleSpeech(text);
+  }catch(e){
+    $("live").textContent="";
+    systemMessage("Speech to text problem: "+e.message);
+  }finally{
+    Q.working=false;
+  }
+}
+
+function onQuietFrame(e){
+  if(!listening||!Q.ctx) return;
+  if(speaking||busy||Q.working||Date.now()<Q.mutedUntil){
+    if(Q.active||Q.pre.length) resetQuiet();
+    return;
+  }
+  const frame=new Float32Array(e.inputBuffer.getChannelData(0));
+  let sum=0;
+  for(let i=0;i<frame.length;i++) sum+=frame[i]*frame[i];
+  const rms=Math.sqrt(sum/frame.length);
+  const frameSec=frame.length/Q.ctx.sampleRate;
+  const loud=rms>Math.max(0.012,Q.noise*3);
+  if(!Q.active){
+    Q.pre.push(frame);
+    if(Q.pre.length>5) Q.pre.shift(); /* keep about 0.4 s before the voice starts */
+    if(loud) Q.voiceFrames++;
+    else{ Q.voiceFrames=0; Q.noise=Q.noise*0.95+rms*0.05; }
+    if(Q.voiceFrames>=2){
+      Q.active=true;
+      Q.buf=Q.pre.slice();
+      Q.pre=[];
+      Q.silence=0;
+      Q.frames=Q.buf.length;
+    }
+  }else{
+    Q.buf.push(frame);
+    Q.frames++;
+    if(loud) Q.silence=0; else Q.silence++;
+    const pauseOver=Q.silence*frameSec>=silenceMs()/1000;
+    if(pauseOver||Q.frames*frameSec>25){
+      const speechSec=(Q.frames-Q.silence)*frameSec;
+      const chunks=Q.buf;
+      const rate=Q.ctx.sampleRate;
+      resetQuiet();
+      if(speechSec>=0.4) transcribeAndAsk(chunks,rate);
+    }
+  }
+}
+
+async function startQuietListening(){
+  if(!config.groqKey){ systemMessage("Always listening needs your Groq key in Settings, because it uses Groq for speech to text."); return; }
+  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){ systemMessage("The microphone is unavailable in this browser."); return; }
+  try{
+    Q.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  }catch{
+    systemMessage("Allow microphone access for this site and try again.");
+    return;
+  }
+  const AC=window.AudioContext||window.webkitAudioContext;
+  Q.ctx=new AC();
+  try{ if(Q.ctx.state==="suspended") await Q.ctx.resume(); }catch{}
+  Q.src=Q.ctx.createMediaStreamSource(Q.stream);
+  Q.node=Q.ctx.createScriptProcessor(4096,1,1);
+  Q.node.onaudioprocess=onQuietFrame;
+  Q.src.connect(Q.node);
+  Q.node.connect(Q.ctx.destination); /* output stays silent; some browsers need the node connected */
+  resetQuiet();
+  Q.working=false;
+  Q.noise=0.01;
+  listening=true;
+  $("listen").textContent="Stop listening";
+  $("listen").classList.add("active");
+  keepAwake();
+  status("Listening");
+}
+function stopQuiet(){
+  try{ if(Q.node){ Q.node.onaudioprocess=null; Q.node.disconnect(); } }catch{}
+  try{ if(Q.src) Q.src.disconnect(); }catch{}
+  try{ if(Q.stream) Q.stream.getTracks().forEach(t=>t.stop()); }catch{}
+  try{ if(Q.ctx) Q.ctx.close(); }catch{}
+  Q.node=Q.src=Q.stream=Q.ctx=null;
+  resetQuiet();
+}
+
 function startRecognitionOnly(){
   if(!listening||speaking)return;
   const API=recognitionAPI();
@@ -1176,7 +1356,7 @@ function startRecognitionOnly(){
   rec.onend=()=>{
     if(recognition!==rec) return; /* an older instance ending must not restart anything */
     if(!listening||speaking) return;
-    if(config.handsFree){
+    if(config.listenMode==="hands"){
       clearTimeout(restartTimer);
       restartTimer=setTimeout(startRecognitionOnly,300);
     }else if(!pendingText&&!busy){
@@ -1189,7 +1369,7 @@ function startRecognitionOnly(){
 let idleTimer=null;
 function resetIdleTimer(){
   clearTimeout(idleTimer);
-  if(config.handsFree) return;
+  if(config.listenMode!=="tap") return;
   idleTimer=setTimeout(()=>{
     if(listening&&!pendingText&&!busy&&!speaking) stopListening();
   },12000);
@@ -1203,6 +1383,7 @@ function stopRecognitionOnly(){
 }
 function stopListening(){
   listening=false;
+  stopQuiet();
   clearTimeout(idleTimer);
   clearPending();
   clearTimeout(restartTimer);
@@ -1237,9 +1418,9 @@ function clearPending(){
 }
 function handleSpeech(text){
   $("live").textContent="";
-  const hasWake=/\bjarvis\b/i.test(text);
-  if(config.handsFree&&wakeEnabled&&!hasWake&&Date.now()>wakeUntil)return;
-  const command=text.replace(/^\s*(hey|okay|ok)?\s*jarvis[\s,.:!?-]*/i,"").trim();
+  const hasWake=/\b(oliver|olivier)\b/i.test(text);
+  if(config.listenMode!=="tap"&&wakeEnabled&&!hasWake&&Date.now()>wakeUntil)return;
+  const command=text.replace(/^\s*(hey|okay|ok)?\s*(oliver|olivier)[\s,.:!?-]*/i,"").trim();
   wakeUntil=Date.now()+8000;
   if(command)ask(command);
   else speak("Yes, sir?");
@@ -1259,7 +1440,7 @@ function populateSettings(){
   $("provider").value=config.provider;
   $("rate").value=config.rate;
   $("pitch").value=config.pitch;
-  $("listenMode").value=config.handsFree?"hands":"tap";
+  $("listenMode").value=config.listenMode;
   $("engine").value=config.voiceEngine;
   $("kokoroVoice").value=config.kokoroVoice;
   $("contacts").value=config.contacts||"";
@@ -1275,7 +1456,7 @@ function populateSettings(){
   showSliderValues();
   populateVoices();
   $("bridgeStatus").textContent=bridgeAvailable()
-    ?"Android bridge detected. Checking available methods…"
+    ?"Running inside the OLIVER Android app: calls, texts, contacts and opening apps are available."
     :"Android bridge not detected. Browser-only mode.";
 }
 function closePanel(id){$(id).classList.remove("open");}
@@ -1312,7 +1493,7 @@ $("pronunciations").oninput=()=>{
   save("jarvis.config",config);
 };
 $("listenMode").onchange=()=>{
-  config.handsFree=$("listenMode").value==="hands";
+  config.listenMode=$("listenMode").value;
   save("jarvis.config",config);
   if(listening) stopListening();
 };
@@ -1415,37 +1596,77 @@ $("installBtn").onclick=async()=>{
 };
 window.addEventListener("appinstalled",()=>{
   $("installGroup").style.display="none";
-  systemMessage("Installed. Open JARVIS from your home screen.");
+  systemMessage("Installed. Open OLIVER from your home screen.");
 });
 if("serviceWorker" in navigator){
   navigator.serviceWorker.register("sw.js").catch(e=>console.debug("Service worker not registered",e));
 }
 
-/* Orb animation: pulses while speaking, breathes while listening */
+/* Face: wakes up when OLIVER is active, sleeps when idle, and the mouth follows the voice.
+   Tap the face to wake it (start listening) or put it to sleep (stop). */
 const canvas=$("orb"),ctx=canvas.getContext("2d");
-let tick=0,energy=0;
+canvas.style.cursor="pointer";
+canvas.setAttribute("role","button");
+canvas.setAttribute("aria-label","Wake or sleep OLIVER");
+canvas.onclick=()=>$("listen").click();
+let tick=0,power=0,eyeOpen=0,mouth=0,phonePulse=0,blinkAt=2,blinkUntil=0;
+const FACE="255,150,60";
 function draw(){
-  tick+=.015;
-  const target=speaking?1:(listening?.35:0);
-  energy+=(target-energy)*.08;
-  const pulse=speaking?Math.sin(tick*14)*.5+.5:0;
-  const x=190,y=190;
+  tick+=.016;
+  const awake=listening||speaking||busy;
+  power+=((awake?1:0)-power)*.07;
+
+  /* mouth: real loudness for the on-device and Gemini voices, word beats for the phone voice */
+  let target=0;
+  if(speaking){
+    if(currentSource&&playAnalyser){
+      playAnalyser.getByteTimeDomainData(waveBuf);
+      let s=0;
+      for(let i=0;i<waveBuf.length;i++){ const v=(waveBuf[i]-128)/128; s+=v*v; }
+      target=Math.min(1,Math.sqrt(s/waveBuf.length)*6);
+    }else{
+      target=Math.min(1,phonePulse*.8+(.2+.2*Math.sin(tick*38)));
+    }
+  }
+  mouth+=(target-mouth)*.5;
+  phonePulse*=.9;
+
+  /* eyes: closed when asleep, open when awake, blinking now and then */
+  if(tick>blinkAt){ blinkUntil=tick+.14; blinkAt=tick+2.5+Math.random()*3.5; }
+  const eyeTarget=power<.15?0:(tick<blinkUntil?.05:1);
+  eyeOpen+=(eyeTarget-eyeOpen)*.35;
+  const look=(busy&&!speaking)?Math.sin(tick*3)*10:0; /* eyes scan side to side while thinking */
+
   ctx.clearRect(0,0,380,380);
-  const radius=150+energy*12+pulse*8;
-  const glow=ctx.createRadialGradient(x,y,5,x,y,radius);
-  glow.addColorStop(0,"rgba(95,227,255,"+(.55+energy*.3)+")");
-  glow.addColorStop(.4,"rgba(20,135,180,"+(.14+energy*.1)+")");
+  const radius=150+power*14+mouth*10;
+  const glow=ctx.createRadialGradient(190,190,10,190,190,radius);
+  glow.addColorStop(0,"rgba("+FACE+","+(.08+.28*power+.15*mouth)+")");
   glow.addColorStop(1,"rgba(0,0,0,0)");
   ctx.fillStyle=glow;
-  ctx.beginPath();ctx.arc(x,y,radius,0,Math.PI*2);ctx.fill();
-  for(let i=0;i<5;i++){
+  ctx.beginPath();ctx.arc(190,190,radius,0,Math.PI*2);ctx.fill();
+
+  for(let i=0;i<4;i++){
     ctx.beginPath();
-    ctx.strokeStyle="rgba(95,227,255,"+(.2+energy*.15-i*.025)+")";
+    ctx.strokeStyle="rgba("+FACE+","+Math.max(0,(.07+.2*power)-i*.025)+")";
     ctx.lineWidth=2;
-    const spin=tick*(1+energy*2)*(i%2?-.3:.3);
-    ctx.arc(x,y,48+i*16+Math.sin(tick*2+i)*3+pulse*3,spin,spin+Math.PI*1.6);
+    const spin=tick*(1+power)*(i%2?-.3:.3);
+    ctx.arc(190,190,140-i*12+Math.sin(tick*2+i)*2,spin,spin+Math.PI*1.7);
     ctx.stroke();
   }
+
+  ctx.fillStyle="rgba("+FACE+","+(.28+.72*power)+")";
+  ctx.shadowColor="rgba("+FACE+",.9)";
+  ctx.shadowBlur=18*power;
+  [135+look,245+look].forEach(x=>{
+    ctx.beginPath();
+    ctx.ellipse(x,165,24,Math.max(2.5,15*eyeOpen),0,0,Math.PI*2);
+    ctx.fill();
+  });
+  ctx.beginPath();
+  ctx.ellipse(190,255,42-8*mouth,3+26*mouth,0,0,Math.PI*2);
+  ctx.fill();
+  ctx.shadowBlur=0;
+
   requestAnimationFrame(draw);
 }
 
@@ -1454,7 +1675,7 @@ history=Array.isArray(history)?history:[];
 memories=Array.isArray(memories)?memories:[];
 history.slice(-20).forEach(m=>addMessage(m.role==="user"?"user":"jarvis",m.content));
 if(!history.length)addMessage("jarvis","Systems online. How may I assist you, sir?");
-systemMessage("JARVIS version 2.9");
+systemMessage("OLIVER version 3.2");
 if("speechSynthesis" in window)speechSynthesis.onvoiceschanged=()=>{
   if($("settingsPanel").classList.contains("open")) populateVoices();
 };
