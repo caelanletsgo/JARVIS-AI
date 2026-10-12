@@ -1,0 +1,493 @@
+name: Build OLIVER APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Write the Android project
+        run: |
+          mkdir -p android
+          cat > android/settings.gradle <<'JARVIS_EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "OLIVER"
+          include(":app")
+          JARVIS_EOF
+          mkdir -p android
+          cat > android/build.gradle <<'JARVIS_EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          JARVIS_EOF
+          mkdir -p android
+          cat > android/gradle.properties <<'JARVIS_EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          android.nonTransitiveRClass=true
+          JARVIS_EOF
+          mkdir -p android/app
+          cat > android/app/build.gradle <<'JARVIS_EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.jarvis.assistant'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.jarvis.assistant"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          JARVIS_EOF
+          mkdir -p android/app/src/main
+          cat > android/app/src/main/AndroidManifest.xml <<'JARVIS_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-permission android:name="android.permission.SEND_SMS" />
+              <uses-permission android:name="android.permission.READ_CONTACTS" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+              <uses-feature android:name="android.hardware.telephony" android:required="false" />
+              <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="false"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="OLIVER"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+
+          </manifest>
+          JARVIS_EOF
+          mkdir -p android/app/src/main/java/com/jarvis/assistant
+          cat > android/app/src/main/java/com/jarvis/assistant/MainActivity.kt <<'JARVIS_EOF'
+          package com.jarvis.assistant
+
+          import android.Manifest
+          import android.app.Activity
+          import android.app.AlertDialog
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.ContactsContract
+          import android.telephony.SmsManager
+          import android.view.WindowManager
+          import android.webkit.GeolocationPermissions
+          import android.webkit.JavascriptInterface
+          import android.webkit.PermissionRequest
+          import android.webkit.WebChromeClient
+          import android.webkit.WebResourceRequest
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.util.concurrent.CountDownLatch
+          import java.util.concurrent.TimeUnit
+          import java.util.concurrent.atomic.AtomicBoolean
+
+          class MainActivity : Activity() {
+
+              private lateinit var web: WebView
+              private var pendingWebRequest: PermissionRequest? = null
+
+              private val startUrl = "https://caelanletsgo.github.io/JARVIS-AI/"
+              private val allowedHost = "caelanletsgo.github.io"
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+                  web = WebView(this)
+                  setContentView(web)
+
+                  val s = web.settings
+                  s.javaScriptEnabled = true
+                  s.domStorageEnabled = true
+                  s.mediaPlaybackRequiresUserGesture = false
+                  s.setGeolocationEnabled(true)
+
+                  web.addJavascriptInterface(Bridge(), "AndroidBridge")
+
+                  web.webViewClient = object : WebViewClient() {
+                      override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                          val host = request.url.host ?: ""
+                          if (host == allowedHost) return false
+                          try {
+                              startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                          } catch (e: Exception) {
+                          }
+                          return true
+                      }
+                  }
+
+                  web.webChromeClient = object : WebChromeClient() {
+                      override fun onPermissionRequest(request: PermissionRequest) {
+                          runOnUiThread { handleWebPermission(request) }
+                      }
+
+                      override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+                          callback.invoke(origin, true, false)
+                      }
+                  }
+
+                  requestAppPermissions()
+                  web.loadUrl(startUrl)
+              }
+
+              override fun onBackPressed() {
+                  if (web.canGoBack()) {
+                      web.goBack()
+                  } else {
+                      super.onBackPressed()
+                  }
+              }
+
+              private fun requestAppPermissions() {
+                  val wanted = arrayOf(
+                      Manifest.permission.RECORD_AUDIO,
+                      Manifest.permission.CALL_PHONE,
+                      Manifest.permission.SEND_SMS,
+                      Manifest.permission.READ_CONTACTS,
+                      Manifest.permission.ACCESS_FINE_LOCATION
+                  )
+                  val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+                  if (missing.isNotEmpty()) {
+                      requestPermissions(missing.toTypedArray(), 10)
+                  }
+              }
+
+              private fun handleWebPermission(request: PermissionRequest) {
+                  val wantsMic = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                  if (wantsMic && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                      pendingWebRequest = request
+                      requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 11)
+                  } else {
+                      request.grant(request.resources)
+                  }
+              }
+
+              override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                  if (requestCode == 11) {
+                      val req = pendingWebRequest
+                      pendingWebRequest = null
+                      if (req != null) {
+                          if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                              req.grant(req.resources)
+                          } else {
+                              req.deny()
+                          }
+                      }
+                  }
+              }
+
+              private fun ok(note: String): String {
+                  return JSONObject().put("success", true).put("note", note).toString()
+              }
+
+              private fun fail(message: String): String {
+                  return JSONObject().put("success", false).put("error", message).toString()
+              }
+
+              private fun digitsOnly(value: String): String {
+                  return value.replace(Regex("[^+0-9]"), "")
+              }
+
+              @Suppress("DEPRECATION")
+              private fun smsManager(): SmsManager {
+                  return if (Build.VERSION.SDK_INT >= 31) {
+                      getSystemService(SmsManager::class.java)
+                  } else {
+                      SmsManager.getDefault()
+                  }
+              }
+
+              /** Asks the user on the phone screen. Blocks the calling (bridge) thread until answered. */
+              private fun confirmOnScreen(message: String): Boolean {
+                  val latch = CountDownLatch(1)
+                  val answer = AtomicBoolean(false)
+                  runOnUiThread {
+                      AlertDialog.Builder(this)
+                          .setTitle("OLIVER")
+                          .setMessage(message)
+                          .setCancelable(false)
+                          .setPositiveButton("Yes") { _, _ ->
+                              answer.set(true)
+                              latch.countDown()
+                          }
+                          .setNegativeButton("No") { _, _ ->
+                              latch.countDown()
+                          }
+                          .show()
+                  }
+                  latch.await(60, TimeUnit.SECONDS)
+                  return answer.get()
+              }
+
+              inner class Bridge {
+
+                  @JavascriptInterface
+                  fun requestPermissions(args: String): String {
+                      runOnUiThread { requestAppPermissions() }
+                      return ok("Permission prompts are showing on the phone.")
+                  }
+
+                  @JavascriptInterface
+                  fun listApps(args: String): String {
+                      val pm = packageManager
+                      val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                      val names = JSONArray()
+                      for (info in pm.queryIntentActivities(intent, 0)) {
+                          names.put(info.loadLabel(pm).toString())
+                      }
+                      return JSONObject().put("success", true).put("apps", names).toString()
+                  }
+
+                  @JavascriptInterface
+                  fun openApp(args: String): String {
+                      val wanted = JSONObject(args).optString("app").trim().lowercase()
+                      if (wanted.isEmpty()) return fail("No app name given.")
+                      val pm = packageManager
+                      val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                      var bestPackage: String? = null
+                      var bestLabel = ""
+                      for (info in pm.queryIntentActivities(intent, 0)) {
+                          val label = info.loadLabel(pm).toString()
+                          val lower = label.lowercase()
+                          if (lower == wanted) {
+                              bestPackage = info.activityInfo.packageName
+                              bestLabel = label
+                              break
+                          }
+                          if (bestPackage == null && lower.isNotEmpty() && (lower.contains(wanted) || wanted.contains(lower))) {
+                              bestPackage = info.activityInfo.packageName
+                              bestLabel = label
+                          }
+                      }
+                      if (bestPackage == null) return fail("No installed app matches " + wanted + ".")
+                      val launch = pm.getLaunchIntentForPackage(bestPackage) ?: return fail("That app cannot be opened.")
+                      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                      runOnUiThread {
+                          try {
+                              startActivity(launch)
+                          } catch (e: Exception) {
+                          }
+                      }
+                      return ok("Opened " + bestLabel + ".")
+                  }
+
+                  @JavascriptInterface
+                  fun findContact(args: String): String {
+                      if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                          return fail("Contacts permission is not granted. Ask the user to allow it.")
+                      }
+                      val name = JSONObject(args).optString("name").trim()
+                      if (name.isEmpty()) return fail("No name given.")
+                      val matches = JSONArray()
+                      val seen = HashSet<String>()
+                      val cursor = contentResolver.query(
+                          ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                          arrayOf(
+                              ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                              ContactsContract.CommonDataKinds.Phone.NUMBER
+                          ),
+                          ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ?",
+                          arrayOf("%" + name + "%"),
+                          null
+                      )
+                      cursor?.use {
+                          while (it.moveToNext() && matches.length() < 5) {
+                              val contactName = it.getString(0) ?: ""
+                              val number = digitsOnly(it.getString(1) ?: "")
+                              if (number.isNotEmpty() && seen.add(contactName + "|" + number)) {
+                                  matches.put(JSONObject().put("name", contactName).put("number", number))
+                              }
+                          }
+                      }
+                      return JSONObject().put("success", true).put("matches", matches).toString()
+                  }
+
+                  @JavascriptInterface
+                  fun call(args: String): String {
+                      val o = JSONObject(args)
+                      val number = digitsOnly(o.optString("number"))
+                      val name = o.optString("name", number)
+                      if (number.isEmpty()) return fail("No phone number given.")
+                      if (!confirmOnScreen("Call " + name + " (" + number + ")?")) {
+                          return fail("The user declined the call on the phone screen.")
+                      }
+                      val uri = Uri.parse("tel:" + number)
+                      return if (checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+                          runOnUiThread { startActivity(Intent(Intent.ACTION_CALL, uri)) }
+                          ok("Calling " + name + " now.")
+                      } else {
+                          runOnUiThread { startActivity(Intent(Intent.ACTION_DIAL, uri)) }
+                          ok("The dialer is open for " + name + ". Phone permission is missing, so the user must tap call.")
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun sendSms(args: String): String {
+                      val o = JSONObject(args)
+                      val number = digitsOnly(o.optString("number"))
+                      val name = o.optString("name", number)
+                      val message = o.optString("message")
+                      if (number.isEmpty() || message.isEmpty()) return fail("A number and a message are required.")
+                      if (!confirmOnScreen("Send this text to " + name + "?\n\n" + message)) {
+                          return fail("The user declined the text on the phone screen.")
+                      }
+                      if (checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+                          val uri = Uri.parse("smsto:" + number)
+                          runOnUiThread {
+                              startActivity(Intent(Intent.ACTION_SENDTO, uri).putExtra("sms_body", message))
+                          }
+                          return ok("SMS permission is missing, so the text is open in the messages app. The user must tap send.")
+                      }
+                      return try {
+                          val sms = smsManager()
+                          sms.sendMultipartTextMessage(number, null, sms.divideMessage(message), null, null)
+                          ok("Text sent to " + name + ".")
+                      } catch (e: Exception) {
+                          fail("Could not send the text: " + (e.message ?: "unknown error"))
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun composeEmail(args: String): String {
+                      val o = JSONObject(args)
+                      val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+                      intent.putExtra(Intent.EXTRA_EMAIL, arrayOf(o.optString("to")))
+                      intent.putExtra(Intent.EXTRA_SUBJECT, o.optString("subject"))
+                      intent.putExtra(Intent.EXTRA_TEXT, o.optString("body"))
+                      runOnUiThread {
+                          try {
+                              startActivity(intent)
+                          } catch (e: Exception) {
+                          }
+                      }
+                      return ok("The email draft is open. The user must tap send.")
+                  }
+
+                  @JavascriptInterface
+                  fun readNotifications(args: String): String {
+                      return fail("Reading notifications is not supported in this version.")
+                  }
+
+                  @JavascriptInterface
+                  fun getCurrentScreen(args: String): String {
+                      return fail("Reading the screen is not supported in this version.")
+                  }
+
+                  @JavascriptInterface
+                  fun findConversation(args: String): String {
+                      return fail("Reading conversations is not supported in this version.")
+                  }
+
+                  @JavascriptInterface
+                  fun webSearch(args: String): String {
+                      return fail("Web search is not available through the app yet.")
+                  }
+              }
+          }
+          JARVIS_EOF
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          cp icon-192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+      - name: Build the APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Name the file
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk oliver.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oliver-apk
+          path: oliver.apk
+
+      - name: Publish the APK as a release
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: OLIVER app (latest)
+          body: Download oliver.apk below and install it on your Android phone.
+          files: oliver.apk
+          overwrite_files: true
